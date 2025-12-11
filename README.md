@@ -4,6 +4,10 @@ steps to produce an amzn-corretto container:
 2. create or use an example docker compose and change `image: itzg/minecraft-server:latest` -> `image: andris/mc-dev:v5`
 3. bring the container up with `docker compose up`
 
+
+if anything breaks I take 0 responsibility and you can figure it out I belive in you :)
+
+
 [![Documentation Status](https://readthedocs.org/projects/docker-minecraft-server/badge/?version=latest)](https://docker-minecraft-server.readthedocs.io/en/latest/?badge=latest)
 
  [![Read the docs](docs/img/docs-banner.png)](https://docker-minecraft-server.readthedocs.io/)
