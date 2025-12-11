@@ -57,7 +57,7 @@ if [[ -v OPS ]]; then
   fi
   # shellcheck disable=SC2086
   mc-image-helper manage-users \
-    "${sharedArgs[@]}" "${args[@]}" \
+    "${sharedArgs[@]}" ${args[@]+"${args[@]}"} \
     --type=JAVA_OPS \
     --existing="${existing}" \
     $OPS
@@ -91,7 +91,7 @@ if [[ -v WHITELIST ]]; then
   fi
   # shellcheck disable=SC2086
   mc-image-helper manage-users \
-    "${sharedArgs[@]}" "${args[@]}" \
+    "${sharedArgs[@]}" ${args[@]+"${args[@]}"} \
     --type=JAVA_WHITELIST \
     --existing="${existing}" \
     $WHITELIST

@@ -1,5 +1,8 @@
-ARG BASE_IMAGE=eclipse-temurin:21-jre
+ARG BASE_IMAGE=amazoncorretto:21
 FROM ${BASE_IMAGE}
+
+# Amazon Linux 2 does not ship with tar or setcap by default
+RUN yum install -y tar libcap openssl
 
 # hook into docker BuildKit --platform support
 # see https://docs.docker.com/engine/reference/builder/#automatic-platform-args-in-the-global-scope

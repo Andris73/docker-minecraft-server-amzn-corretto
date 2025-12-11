@@ -1,16 +1,17 @@
 services:
   mc:
-    image: itzg/minecraft-server
+    # image: itzg/minecraft-server
+    image: mtp/mc-dev:v5
     tty: true
     stdin_open: true
     environment:
       EULA: "true"
       TYPE: PAPER
       MEMORY: 2G
+      OPS: |
+        Andris37
     ports:
       - "25565:25565"
     volumes:
-      - mc-data:/data
+      - ./data:/data
     restart: unless-stopped
-volumes:
-  mc-data: {}
