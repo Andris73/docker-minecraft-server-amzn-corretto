@@ -1,18 +1,12 @@
-[![Docker Pulls](https://img.shields.io/docker/pulls/itzg/minecraft-server.svg?logo=docker)](https://hub.docker.com/r/itzg/minecraft-server/)
-[![Docker Stars](https://img.shields.io/docker/stars/itzg/minecraft-server.svg?logo=docker)](https://hub.docker.com/r/itzg/minecraft-server/)
-[![GitHub Issues](https://img.shields.io/github/issues-raw/itzg/docker-minecraft-server.svg)](https://github.com/itzg/docker-minecraft-server/issues)
-[![Discord](https://img.shields.io/discord/660567679458869252?label=Discord&logo=discord)](https://discord.gg/DXfKpjB)
-[![Build and Publish](https://github.com/itzg/docker-minecraft-server/actions/workflows/build-multiarch.yml/badge.svg)](https://github.com/itzg/docker-minecraft-server/actions/workflows/build-multiarch.yml)
-[![](https://img.shields.io/badge/Donate-Buy%20me%20a%20coffee-orange.svg)](https://www.buymeacoffee.com/itzg)
-[![Documentation Status](https://readthedocs.org/projects/docker-minecraft-server/badge/?version=latest)](https://docker-minecraft-server.readthedocs.io/en/latest/?badge=latest)
-
- [![Read the docs](docs/img/docs-banner.png)](https://docker-minecraft-server.readthedocs.io/)
 
 steps to produce an amzn-corretto container:
 1. Build the container using this branch via: `docker build . -t andris/mc-dev:v5` execute this in the root of the repo!
 2. create or use an example docker compose and change `image: itzg/minecraft-server:latest` -> `image: andris/mc-dev:v5`
 3. bring the container up with `docker compose up`
 
+[![Documentation Status](https://readthedocs.org/projects/docker-minecraft-server/badge/?version=latest)](https://docker-minecraft-server.readthedocs.io/en/latest/?badge=latest)
+
+ [![Read the docs](docs/img/docs-banner.png)](https://docker-minecraft-server.readthedocs.io/)
 
 There you will find things like
 - [Quick start with Docker Compose](https://docker-minecraft-server.readthedocs.io/en/latest/#using-docker-compose)
