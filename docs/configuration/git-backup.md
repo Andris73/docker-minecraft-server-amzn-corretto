@@ -226,6 +226,34 @@ git init
 git remote add origin <your-remote-url>
 ```
 
+!!! warning "File Ownership"
+
+    When initializing git manually via `docker exec`, you typically run as root, but the Minecraft server runs as uid 1000. This causes permission errors.
+
+    **After running `git init`, fix the ownership:**
+
+    ```bash
+    # Inside the container (as root)
+    chown -R 1000:1000 /data/.git
+    ```
+
+    Or initialize as the correct user:
+
+    ```bash
+    docker exec -u 1000 -it <container_name> bash
+    cd /data
+    git init
+    git lfs install
+    ```
+
+    You can verify correct ownership with:
+
+    ```bash
+    ls -la /data/.git
+    # Should show: drwxr-xr-x ... 1000 1000 ... .git
+    # Or: drwxr-xr-x ... minecraft minecraft ... .git
+    ```
+
 ## Excluding Files with .gitignore
 
 For better control over what gets backed up, create a `.gitignore` file in your data directory:
