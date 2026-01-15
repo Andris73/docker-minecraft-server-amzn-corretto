@@ -6,7 +6,7 @@
 : "${GIT_BACKUP_ENABLED:=false}"
 : "${GIT_BACKUP_PATH:=/data}"
 : "${GIT_BACKUP_ON_STARTUP:=false}"
-: "${GIT_BACKUP_ON_LAST_DISCONNECT:=true}"
+: "${GIT_BACKUP_ON_LAST_DISCONNECT:=false}"
 : "${GIT_BACKUP_PERIOD:=0}"
 : "${GIT_BACKUP_COMMIT_MSG:=Auto backup - %DATE%}"
 : "${GIT_BACKUP_BRANCH:=}"

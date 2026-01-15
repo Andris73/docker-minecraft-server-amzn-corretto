@@ -6,7 +6,7 @@
 : "${GIT_BACKUP_ENABLED:=false}"
 : "${GIT_BACKUP_PATH:=/data}"
 : "${GIT_BACKUP_ON_STARTUP:=false}"
-: "${GIT_BACKUP_ON_LAST_DISCONNECT:=true}"
+: "${GIT_BACKUP_ON_LAST_DISCONNECT:=false}"
 : "${GIT_BACKUP_PERIOD:=0}"
 : "${GIT_BACKUP_COMMIT_MSG:=Auto backup - %DATE%}"
 : "${GIT_BACKUP_BRANCH:=}"
@@ -209,14 +209,16 @@ run_git_backup() {
   git config user.name "${GIT_BACKUP_AUTHOR_NAME}" 2>/dev/null
   git config user.email "${GIT_BACKUP_AUTHOR_EMAIL}" 2>/dev/null
   
-  # Add files
+  # Add files (use -A to include deletions and modifications)
   local add_paths
   IFS=',' read -ra add_paths <<< "${GIT_BACKUP_ADD_PATHS}"
   for path in "${add_paths[@]}"; do
     path=$(echo "$path" | xargs)  # trim whitespace
     if [[ -n "$path" ]]; then
       logGitBackup "Adding path: ${path}"
-      git add "${path}" 2>/dev/null || logGitBackup "WARNING: Failed to add ${path}"
+      if ! git add -A "${path}" 2>&1; then
+        logGitBackup "WARNING: Failed to add ${path}"
+      fi
     fi
   done
   
@@ -228,7 +230,7 @@ run_git_backup() {
       path=$(echo "$path" | xargs)  # trim whitespace
       if [[ -n "$path" ]]; then
         logGitBackup "Excluding path: ${path}"
-        git reset HEAD -- "${path}" 2>/dev/null || true
+        git reset HEAD -- "${path}" >/dev/null 2>&1 || true
       fi
     done
   fi

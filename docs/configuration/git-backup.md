@@ -21,7 +21,7 @@ Set `GIT_BACKUP_ENABLED` to `true` to enable the git backup daemon:
 | `GIT_BACKUP_ENABLED` | `false` | Enable or disable the git backup feature |
 | `GIT_BACKUP_PATH` | `/data` | Path to the directory to backup (must be a git repository) |
 | `GIT_BACKUP_ON_STARTUP` | `false` | Run a backup when the server starts |
-| `GIT_BACKUP_ON_LAST_DISCONNECT` | `true` | Run a backup when all players disconnect |
+| `GIT_BACKUP_ON_LAST_DISCONNECT` | `false` | Run a backup when all players disconnect |
 | `GIT_BACKUP_PERIOD` | `0` | Periodic backup interval in seconds (0 = disabled) |
 | `GIT_BACKUP_COMMIT_MSG` | `Auto backup - %DATE%` | Commit message template |
 | `GIT_BACKUP_BRANCH` | `` | Branch to commit to (empty = current branch) |
