@@ -5,8 +5,7 @@
 
 : "${GIT_BACKUP_ENABLED:=false}"
 : "${GIT_BACKUP_PATH:=/data}"
-: "${GIT_BACKUP_ON_STARTUP:=false}"
-: "${GIT_BACKUP_ON_LAST_DISCONNECT:=false}"
+: "${GIT_BACKUP_TRIGGERS:=}"
 : "${GIT_BACKUP_PERIOD:=0}"
 : "${GIT_BACKUP_COMMIT_MSG:=Auto backup - %DATE%}"
 : "${GIT_BACKUP_BRANCH:=}"
@@ -34,6 +33,27 @@ logGitBackup() {
 
 logGitBackupAction() {
   echo "[$(date -Iseconds)] [Git Backup] $*"
+}
+
+# Check if a trigger is enabled in GIT_BACKUP_TRIGGERS
+is_trigger_enabled() {
+  local trigger="$1"
+  local triggers_list="${GIT_BACKUP_TRIGGERS}"
+  
+  # Empty triggers means nothing is enabled
+  if [[ -z "$triggers_list" ]]; then
+    return 1
+  fi
+  
+  # Check if trigger is in the comma-separated list
+  IFS=',' read -ra triggers_array <<< "$triggers_list"
+  for t in "${triggers_array[@]}"; do
+    t=$(echo "$t" | xargs)  # trim whitespace
+    if [[ "${t,,}" == "${trigger,,}" ]]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 check_git_installed() {
@@ -392,8 +412,7 @@ fi
 
 logGitBackup "Git backup daemon starting"
 logGitBackup "  Backup path: ${GIT_BACKUP_PATH}"
-logGitBackup "  On startup: ${GIT_BACKUP_ON_STARTUP}"
-logGitBackup "  On last disconnect: ${GIT_BACKUP_ON_LAST_DISCONNECT}"
+logGitBackup "  Triggers: ${GIT_BACKUP_TRIGGERS:-none}"
 logGitBackup "  Period: ${GIT_BACKUP_PERIOD}s (0=disabled)"
 logGitBackup "  LFS enabled: ${GIT_BACKUP_LFS_ENABLED}"
 if isTrue "${GIT_BACKUP_LFS_ENABLED}"; then
@@ -433,6 +452,7 @@ done
 CLIENTCONNECTIONS=0
 STATE=INIT
 LAST_BACKUP_TIME=0
+FIRST_JOIN_DONE=false
 
 while :
 do
@@ -441,17 +461,17 @@ do
   case X$STATE in
   XINIT)
     # Server startup
-    if mc_server_listening; then
+    if mc_server_listening ; then
       logGitBackup "Minecraft server is listening"
       
-      if isTrue "${GIT_BACKUP_ON_STARTUP}"; then
+      if is_trigger_enabled "startup"; then
         run_git_backup "startup"
         LAST_BACKUP_TIME=$CURRENT_TIME
       fi
       
       # Check if we need to continue running
-      if ! isTrue "${GIT_BACKUP_ON_LAST_DISCONNECT}" && [[ "${GIT_BACKUP_PERIOD}" -eq 0 ]]; then
-        logGitBackup "No additional backup triggers configured, stopping daemon"
+      if [[ -z "${GIT_BACKUP_TRIGGERS}" ]] && [[ "${GIT_BACKUP_PERIOD}" -eq 0 ]]; then
+        logGitBackup "No backup triggers configured, stopping daemon"
         exit 0
       fi
       
@@ -475,8 +495,40 @@ do
       fi
     fi
     
-    # Check for last disconnect backup
-    if isTrue "${GIT_BACKUP_ON_LAST_DISCONNECT}"; then
+    # Check for first_join backup
+    if is_trigger_enabled "first_join"; then
+      if (( CURR_CLIENTCONNECTIONS > 0 )) && [[ "$FIRST_JOIN_DONE" == "false" ]]; then
+        logGitBackupAction "First player joined, running backup"
+        run_git_backup "first_join"
+        LAST_BACKUP_TIME=$CURRENT_TIME
+        FIRST_JOIN_DONE=true
+      fi
+      # Reset first_join flag when all players leave
+      if (( CURR_CLIENTCONNECTIONS == 0 )); then
+        FIRST_JOIN_DONE=false
+      fi
+    fi
+    
+    # Check for on_connect backup (any player joins)
+    if is_trigger_enabled "on_connect"; then
+      if (( CURR_CLIENTCONNECTIONS > CLIENTCONNECTIONS )); then
+        logGitBackupAction "Player connected, running backup"
+        run_git_backup "on_connect"
+        LAST_BACKUP_TIME=$CURRENT_TIME
+      fi
+    fi
+    
+    # Check for on_disconnect backup (any player leaves)
+    if is_trigger_enabled "on_disconnect"; then
+      if (( CURR_CLIENTCONNECTIONS < CLIENTCONNECTIONS )) && (( CLIENTCONNECTIONS > 0 )); then
+        logGitBackupAction "Player disconnected, running backup"
+        run_git_backup "on_disconnect"
+        LAST_BACKUP_TIME=$CURRENT_TIME
+      fi
+    fi
+    
+    # Check for last_disconnect backup
+    if is_trigger_enabled "last_disconnect"; then
       if (( CURR_CLIENTCONNECTIONS == 0 )) && (( CLIENTCONNECTIONS > 0 )); then
         logGitBackupAction "All players disconnected, running backup"
         run_git_backup "last_disconnect"

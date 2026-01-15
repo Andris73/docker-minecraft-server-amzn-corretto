@@ -20,8 +20,7 @@ Set `GIT_BACKUP_ENABLED` to `true` to enable the git backup daemon:
 |----------|---------|-------------|
 | `GIT_BACKUP_ENABLED` | `false` | Enable or disable the git backup feature |
 | `GIT_BACKUP_PATH` | `/data` | Path to the directory to backup (must be a git repository) |
-| `GIT_BACKUP_ON_STARTUP` | `false` | Run a backup when the server starts |
-| `GIT_BACKUP_ON_LAST_DISCONNECT` | `false` | Run a backup when all players disconnect |
+| `GIT_BACKUP_TRIGGERS` | `` | Comma-separated list of backup triggers (see below) |
 | `GIT_BACKUP_PERIOD` | `0` | Periodic backup interval in seconds (0 = disabled) |
 | `GIT_BACKUP_COMMIT_MSG` | `Auto backup - %DATE%` | Commit message template |
 | `GIT_BACKUP_BRANCH` | `` | Branch to commit to (empty = current branch) |
@@ -36,6 +35,31 @@ Set `GIT_BACKUP_ENABLED` to `true` to enable the git backup daemon:
 | `GIT_BACKUP_REMOTE_NAME` | `origin` | Name of the git remote |
 | `GIT_BACKUP_RESTORE_COMMIT` | `` | Restore to this commit on startup (empty = no restore) |
 | `GIT_BACKUP_AUTO_INIT` | `false` | Automatically initialize git repository if it doesn't exist |
+
+## Backup Triggers
+
+The `GIT_BACKUP_TRIGGERS` variable accepts a comma-separated list of trigger events:
+
+| Trigger | Description |
+|---------|-------------|
+| `startup` | Run backup when the server starts and is ready |
+| `last_disconnect` | Run backup when the last player disconnects (server empty) |
+| `first_join` | Run backup when the first player joins (after server was empty) |
+| `on_connect` | Run backup whenever any player connects |
+| `on_disconnect` | Run backup whenever any player disconnects |
+
+**Examples:**
+
+``` yaml
+# Single trigger
+GIT_BACKUP_TRIGGERS: "startup"
+
+# Multiple triggers
+GIT_BACKUP_TRIGGERS: "startup,last_disconnect"
+
+# All common triggers
+GIT_BACKUP_TRIGGERS: "startup,first_join,last_disconnect"
+```
 
 ## Commit Message Templates
 
@@ -57,7 +81,17 @@ The commit message supports the following placeholders:
 ``` yaml
     environment:
       GIT_BACKUP_ENABLED: "true"
-      GIT_BACKUP_ON_LAST_DISCONNECT: "true"
+      GIT_BACKUP_AUTO_INIT: "true"
+      GIT_BACKUP_TRIGGERS: "last_disconnect"
+```
+
+**Backup on startup and when players leave:**
+
+``` yaml
+    environment:
+      GIT_BACKUP_ENABLED: "true"
+      GIT_BACKUP_AUTO_INIT: "true"
+      GIT_BACKUP_TRIGGERS: "startup,last_disconnect"
 ```
 
 **Periodic backups every hour:**
@@ -65,8 +99,8 @@ The commit message supports the following placeholders:
 ``` yaml
     environment:
       GIT_BACKUP_ENABLED: "true"
+      GIT_BACKUP_AUTO_INIT: "true"
       GIT_BACKUP_PERIOD: "3600"
-      GIT_BACKUP_ON_LAST_DISCONNECT: "false"
 ```
 
 **Full configuration example:**
@@ -74,9 +108,9 @@ The commit message supports the following placeholders:
 ``` yaml
     environment:
       GIT_BACKUP_ENABLED: "true"
+      GIT_BACKUP_AUTO_INIT: "true"
       GIT_BACKUP_PATH: "/data"
-      GIT_BACKUP_ON_STARTUP: "true"
-      GIT_BACKUP_ON_LAST_DISCONNECT: "true"
+      GIT_BACKUP_TRIGGERS: "startup,last_disconnect"
       GIT_BACKUP_PERIOD: "1800"
       GIT_BACKUP_COMMIT_MSG: "Minecraft backup [%REASON%] - %DATE%"
       GIT_BACKUP_BRANCH: "backups"
