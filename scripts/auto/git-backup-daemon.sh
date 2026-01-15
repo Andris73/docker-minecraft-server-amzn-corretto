@@ -165,6 +165,13 @@ check_git_repo() {
   return 0
 }
 
+configure_git_safe_directory() {
+  # Add safe.directory to prevent "dubious ownership" errors
+  # This is needed when running as different users in containers
+  logGitBackup "Configuring git safe.directory for ${GIT_BACKUP_PATH}"
+  git config --global --add safe.directory "${GIT_BACKUP_PATH}" 2>/dev/null || true
+}
+
 has_changes() {
   cd "${GIT_BACKUP_PATH}" || return 1
   if [[ -n $(git status --porcelain 2>/dev/null) ]]; then
@@ -263,6 +270,9 @@ if ! check_git_repo; then
   logGitBackup "Hint: Initialize a git repo with 'git init ${GIT_BACKUP_PATH}'"
   exit 1
 fi
+
+# Configure safe.directory to prevent ownership issues
+configure_git_safe_directory
 
 # Validate LFS if enabled
 if isTrue "${GIT_BACKUP_LFS_ENABLED}"; then
