@@ -183,6 +183,12 @@ then
   "$(dirname "$0")/start-rconcmds"
 fi
 
+if isTrue "${GIT_BACKUP_ENABLED:-false}"; then
+  log "Starting Git backup daemon"
+  # shellcheck source=start-gitbackup
+  "$(dirname "$0")/start-gitbackup"
+fi
+
 : "${MODPACK_PLATFORM:=${MOD_PLATFORM:-}}"
 
 if [[ $MODPACK_PLATFORM && $TYPE && $TYPE != VANILLA ]]; then
