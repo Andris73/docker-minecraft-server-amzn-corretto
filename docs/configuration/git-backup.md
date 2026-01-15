@@ -34,6 +34,7 @@ Set `GIT_BACKUP_ENABLED` to `true` to enable the git backup daemon:
 | `GIT_BACKUP_PUSH_ENABLED` | `false` | Enable pushing commits to a remote repository |
 | `GIT_BACKUP_REMOTE` | `` | Remote repository URL (required if push enabled) |
 | `GIT_BACKUP_REMOTE_NAME` | `origin` | Name of the git remote |
+| `GIT_BACKUP_RESTORE_COMMIT` | `` | Restore to this commit on startup (empty = no restore) |
 
 ## Commit Message Templates
 
@@ -291,3 +292,117 @@ crash-reports/
 - **Large world** (extensive exploration): 5-20+ GB
 
 With Git LFS, only changed chunks are uploaded on each backup, making incremental backups efficient.
+
+## Restoring Backups
+
+There are two ways to restore from a backup:
+
+### Method 1: Using the Restore Script (Recommended)
+
+The `git-backup-restore.sh` script provides an easy way to manage and restore backups.
+
+**List available backups:**
+
+```bash
+docker exec -it <container_name> /image/scripts/auto/git-backup-restore.sh list
+```
+
+Output:
+```
+[INFO] Available backups (last 10):
+
+COMMIT      DATE                      MESSAGE
+────────────────────────────────────────────────────────────────────
+abc1234  2025-01-15 16:20:55 +0000  Server backup [2025-01-15T16:20:55+00:00]
+def5678  2025-01-15 14:30:00 +0000  Server backup [2025-01-15T14:30:00+00:00]
+...
+```
+
+**Show details of a specific backup:**
+
+```bash
+docker exec -it <container_name> /image/scripts/auto/git-backup-restore.sh show HEAD~1
+```
+
+**Restore to a previous backup:**
+
+```bash
+# First, stop the server
+docker stop <container_name>
+
+# Restore to the previous backup
+docker exec -it <container_name> /image/scripts/auto/git-backup-restore.sh restore HEAD~1
+
+# Or restore to a specific commit
+docker exec -it <container_name> /image/scripts/auto/git-backup-restore.sh restore abc1234
+
+# Start the server
+docker start <container_name>
+```
+
+**Show what changed since a backup:**
+
+```bash
+docker exec -it <container_name> /image/scripts/auto/git-backup-restore.sh diff HEAD~1
+```
+
+**Available commands:**
+
+| Command | Description |
+|---------|-------------|
+| `list [count]` | List available backups (default: 10) |
+| `show <commit>` | Show details of a specific backup |
+| `restore <commit>` | Restore to a specific backup |
+| `diff <commit>` | Show changes between current state and a backup |
+| `pull` | Pull latest changes from remote |
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-f, --force` | Force restore without confirmation |
+| `-p, --path <path>` | Override backup path |
+| `-h, --help` | Show help message |
+
+### Method 2: Automatic Restore on Startup
+
+You can automatically restore to a specific commit when the container starts by setting `GIT_BACKUP_RESTORE_COMMIT`:
+
+``` yaml
+    environment:
+      GIT_BACKUP_ENABLED: "true"
+      GIT_BACKUP_RESTORE_COMMIT: "abc1234"  # Commit hash or reference
+```
+
+This is useful for:
+- Rolling back after a bad update
+- Deploying a known good state
+- Disaster recovery
+
+!!! warning
+
+    Remember to remove `GIT_BACKUP_RESTORE_COMMIT` after the restore completes, or the server will restore to that commit on every restart.
+
+### Restore Examples
+
+**Restore to the previous backup:**
+
+```bash
+docker exec -it mc /image/scripts/auto/git-backup-restore.sh restore HEAD~1 --force
+```
+
+**Restore to 3 backups ago:**
+
+```bash
+docker exec -it mc /image/scripts/auto/git-backup-restore.sh restore HEAD~3
+```
+
+**Restore to a specific date (find commit first):**
+
+```bash
+# List more backups to find the right one
+docker exec -it mc /image/scripts/auto/git-backup-restore.sh list 50
+
+# Then restore to that commit
+docker exec -it mc /image/scripts/auto/git-backup-restore.sh restore abc1234
+```

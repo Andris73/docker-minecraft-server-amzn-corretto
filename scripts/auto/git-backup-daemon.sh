@@ -19,6 +19,7 @@
 : "${GIT_BACKUP_PUSH_ENABLED:=false}"
 : "${GIT_BACKUP_REMOTE:=}"
 : "${GIT_BACKUP_REMOTE_NAME:=origin}"
+: "${GIT_BACKUP_RESTORE_COMMIT:=}"
 
 # shellcheck source=../auto/autopause-fcns.sh
 . /image/scripts/auto/autopause-fcns.sh
@@ -172,6 +173,57 @@ configure_git_safe_directory() {
   git config --global --add safe.directory "${GIT_BACKUP_PATH}" 2>/dev/null || true
 }
 
+restore_from_commit() {
+  local commit="${GIT_BACKUP_RESTORE_COMMIT}"
+  
+  if [[ -z "$commit" ]]; then
+    return 0
+  fi
+  
+  logGitBackup "Restore requested to commit: ${commit}"
+  
+  cd "${GIT_BACKUP_PATH}" || {
+    logGitBackup "ERROR: Failed to change to ${GIT_BACKUP_PATH}"
+    return 1
+  }
+  
+  # Verify commit exists
+  if ! git cat-file -e "${commit}^{commit}" 2>/dev/null; then
+    logGitBackup "ERROR: Commit '${commit}' not found"
+    logGitBackup "Use 'git log --oneline' to see available commits"
+    return 1
+  fi
+  
+  # Get commit info for logging
+  local commit_hash
+  local commit_date
+  local commit_msg
+  commit_hash=$(git rev-parse "${commit}")
+  commit_date=$(git show -s --format="%ci" "${commit}")
+  commit_msg=$(git show -s --format="%s" "${commit}")
+  
+  logGitBackup "Restoring to:"
+  logGitBackup "  Commit:  ${commit_hash}"
+  logGitBackup "  Date:    ${commit_date}"
+  logGitBackup "  Message: ${commit_msg}"
+  
+  # Perform the restore
+  if git reset --hard "${commit}"; then
+    # If LFS is enabled, pull LFS files
+    if isTrue "${GIT_BACKUP_LFS_ENABLED}" && [[ -f ".gitattributes" ]]; then
+      logGitBackup "Pulling LFS files..."
+      git lfs pull 2>/dev/null || logGitBackup "WARNING: LFS pull failed"
+    fi
+    
+    logGitBackupAction "Restore completed successfully"
+    logGitBackup "Server data restored to: $(git rev-parse --short HEAD)"
+    return 0
+  else
+    logGitBackup "ERROR: Failed to restore to commit ${commit}"
+    return 1
+  fi
+}
+
 has_changes() {
   cd "${GIT_BACKUP_PATH}" || return 1
   if [[ -n $(git status --porcelain 2>/dev/null) ]]; then
@@ -275,6 +327,15 @@ fi
 
 # Configure safe.directory to prevent ownership issues
 configure_git_safe_directory
+
+# Restore from commit if requested
+if [[ -n "${GIT_BACKUP_RESTORE_COMMIT}" ]]; then
+  if ! restore_from_commit; then
+    logGitBackup "ERROR: Restore failed, continuing with current state"
+  fi
+  # Clear the variable so we don't restore again on next iteration
+  GIT_BACKUP_RESTORE_COMMIT=""
+fi
 
 # Validate LFS if enabled
 if isTrue "${GIT_BACKUP_LFS_ENABLED}"; then
