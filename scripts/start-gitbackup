@@ -1,0 +1,52 @@
+#!/bin/bash
+
+# shellcheck source=start-utils
+. "$(dirname "$0")/start-utils"
+
+: "${GIT_BACKUP_ENABLED:=false}"
+: "${GIT_BACKUP_PATH:=/data}"
+: "${GIT_BACKUP_ON_STARTUP:=false}"
+: "${GIT_BACKUP_ON_LAST_DISCONNECT:=true}"
+: "${GIT_BACKUP_PERIOD:=0}"
+: "${GIT_BACKUP_COMMIT_MSG:=Auto backup - %DATE%}"
+: "${GIT_BACKUP_BRANCH:=}"
+: "${GIT_BACKUP_ADD_PATHS:=.}"
+: "${GIT_BACKUP_EXCLUDE_PATHS:=}"
+: "${GIT_BACKUP_AUTHOR_NAME:=Minecraft Server}"
+: "${GIT_BACKUP_AUTHOR_EMAIL:=minecraft@server.local}"
+: "${GIT_BACKUP_LFS_ENABLED:=false}"
+: "${GIT_BACKUP_LFS_PATTERNS:=*.mca,*.jar,*.zip,*.dat,*.dat_old,*.nbt}"
+: "${GIT_BACKUP_PUSH_ENABLED:=false}"
+: "${GIT_BACKUP_REMOTE:=}"
+: "${GIT_BACKUP_REMOTE_NAME:=origin}"
+: "${SERVER_PORT:=25565}"
+
+export GIT_BACKUP_ENABLED
+export GIT_BACKUP_PATH
+export GIT_BACKUP_ON_STARTUP
+export GIT_BACKUP_ON_LAST_DISCONNECT
+export GIT_BACKUP_PERIOD
+export GIT_BACKUP_COMMIT_MSG
+export GIT_BACKUP_BRANCH
+export GIT_BACKUP_ADD_PATHS
+export GIT_BACKUP_EXCLUDE_PATHS
+export GIT_BACKUP_AUTHOR_NAME
+export GIT_BACKUP_AUTHOR_EMAIL
+export GIT_BACKUP_LFS_ENABLED
+export GIT_BACKUP_LFS_PATTERNS
+export GIT_BACKUP_PUSH_ENABLED
+export GIT_BACKUP_REMOTE
+export GIT_BACKUP_REMOTE_NAME
+export SERVER_PORT
+
+if ! isTrue "${GIT_BACKUP_ENABLED}"; then
+  exit 0
+fi
+
+log "Git backup functionality enabled"
+
+isDebugging && set -x
+
+isNumericElseSetToDefault GIT_BACKUP_PERIOD 0
+
+"$(dirname "$0")/auto/git-backup-daemon.sh" &
