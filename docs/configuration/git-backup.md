@@ -35,6 +35,7 @@ Set `GIT_BACKUP_ENABLED` to `true` to enable the git backup daemon:
 | `GIT_BACKUP_REMOTE` | `` | Remote repository URL (required if push enabled) |
 | `GIT_BACKUP_REMOTE_NAME` | `origin` | Name of the git remote |
 | `GIT_BACKUP_RESTORE_COMMIT` | `` | Restore to this commit on startup (empty = no restore) |
+| `GIT_BACKUP_AUTO_INIT` | `false` | Automatically initialize git repository if it doesn't exist |
 
 ## Commit Message Templates
 
@@ -208,23 +209,37 @@ If you need to use a remote name other than `origin`:
 
 ## Setting Up the Git Repository
 
-Before using git backup, you need to initialize the backup path as a git repository:
+Before using git backup, the backup path must be a git repository. There are several ways to set this up:
 
-**Option 1: Mount an existing repository:**
+**Option 1: Automatic Initialization (Recommended)**
+
+Set `GIT_BACKUP_AUTO_INIT` to `true` and the daemon will automatically initialize the git repository on first startup:
+
+``` yaml
+    environment:
+      GIT_BACKUP_ENABLED: "true"
+      GIT_BACKUP_AUTO_INIT: "true"
+      GIT_BACKUP_LFS_ENABLED: "true"
+```
+
+This will automatically run `git init` and `git lfs install` (if LFS is enabled) when the container starts.
+
+**Option 2: Mount an existing repository:**
 
 ``` yaml
     volumes:
       - /path/to/your/backup-repo:/data
 ```
 
-**Option 2: Initialize during container setup:**
-
-You can use an init script or manually run:
+**Option 3: Initialize manually:**
 
 ```bash
+docker exec -u 1000 -it <container_name> bash
 cd /data
 git init
-git remote add origin <your-remote-url>
+git lfs install  # if using LFS
+git remote add origin <your-remote-url>  # if pushing to remote
+exit
 ```
 
 !!! warning "File Ownership"

@@ -20,6 +20,7 @@
 : "${GIT_BACKUP_REMOTE:=}"
 : "${GIT_BACKUP_REMOTE_NAME:=origin}"
 : "${GIT_BACKUP_RESTORE_COMMIT:=}"
+: "${GIT_BACKUP_AUTO_INIT:=false}"
 
 # shellcheck source=../auto/autopause-fcns.sh
 . /image/scripts/auto/autopause-fcns.sh
@@ -48,6 +49,45 @@ check_git_lfs_installed() {
     logGitBackup "ERROR: git-lfs is not installed but GIT_BACKUP_LFS_ENABLED is true"
     return 1
   fi
+  return 0
+}
+
+auto_init_git_repo() {
+  if ! isTrue "${GIT_BACKUP_AUTO_INIT}"; then
+    return 1
+  fi
+  
+  if [[ -d "${GIT_BACKUP_PATH}/.git" ]]; then
+    # Already initialized
+    return 0
+  fi
+  
+  logGitBackup "Auto-initializing git repository in ${GIT_BACKUP_PATH}"
+  
+  cd "${GIT_BACKUP_PATH}" || {
+    logGitBackup "ERROR: Failed to change to ${GIT_BACKUP_PATH}"
+    return 1
+  }
+  
+  # Initialize git
+  if ! git init 2>&1; then
+    logGitBackup "ERROR: Failed to initialize git repository"
+    return 1
+  fi
+  
+  # Configure git user
+  git config user.name "${GIT_BACKUP_AUTHOR_NAME}" 2>/dev/null
+  git config user.email "${GIT_BACKUP_AUTHOR_EMAIL}" 2>/dev/null
+  
+  # Initialize LFS if enabled
+  if isTrue "${GIT_BACKUP_LFS_ENABLED}"; then
+    if command -v git-lfs &> /dev/null; then
+      logGitBackup "Initializing Git LFS..."
+      git lfs install --local 2>&1 || logGitBackup "WARNING: Failed to initialize LFS"
+    fi
+  fi
+  
+  logGitBackup "Git repository initialized successfully"
   return 0
 }
 
@@ -160,7 +200,13 @@ run_git_push() {
 
 check_git_repo() {
   if [[ ! -d "${GIT_BACKUP_PATH}/.git" ]]; then
+    # Try auto-init if enabled
+    if isTrue "${GIT_BACKUP_AUTO_INIT}"; then
+      auto_init_git_repo
+      return $?
+    fi
     logGitBackup "ERROR: ${GIT_BACKUP_PATH} is not a git repository"
+    logGitBackup "Hint: Set GIT_BACKUP_AUTO_INIT=true to automatically initialize"
     return 1
   fi
   return 0
