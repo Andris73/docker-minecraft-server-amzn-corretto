@@ -20,6 +20,7 @@
 : "${GIT_BACKUP_AUTHOR_EMAIL:=minecraft@server.local}"
 : "${GIT_BACKUP_SSH_KEYGEN:=true}"
 : "${GIT_BACKUP_SSH_KEY_PATH:=${GIT_BACKUP_PATH}/.ssh}"
+: "${GIT_BACKUP_GITIGNORE_PATTERNS:=logs/,crash-reports/,cache/,bluemap/,libraries/,plugins/spark/,.ssh/}"
 
 # shellcheck source=../start-utils
 . /image/scripts/start-utils
@@ -218,7 +219,7 @@ clone_from_remote() {
     fi
   fi
 
-  # Fetch from remote (with retry logic for new SSH keys)
+  # Fetch from remote (with retry logic for SSH key setup)
   logGitBackupInitAction "Fetching from remote..."
   local fetch_output
   local fetch_exit_code
@@ -230,8 +231,9 @@ clone_from_remote() {
   fetch_output=$(git fetch "${GIT_BACKUP_REMOTE_NAME}" 2>&1)
   fetch_exit_code=$?
 
-  # If fetch failed and this is a new SSH key, wait for user to add deploy key
-  if [[ $fetch_exit_code -ne 0 ]] && isTrue "${GIT_BACKUP_SSH_KEY_NEW:-false}"; then
+  # If fetch failed with permission denied, wait for user to add deploy key
+  # This applies whether the key is new or existing (user might not have added it yet)
+  if [[ $fetch_exit_code -ne 0 ]]; then
     if [[ "$fetch_output" == *"Permission denied"* ]] || [[ "$fetch_output" == *"publickey"* ]]; then
       logGitBackupInit ""
       logGitBackupInit "============================================================"
@@ -286,11 +288,9 @@ clone_from_remote() {
     if [[ -n "$fetch_output" ]]; then
       logGitBackupInit "  Error details: ${fetch_output}"
     fi
-    if isTrue "${GIT_BACKUP_SSH_KEY_NEW:-false}"; then
-      logGitBackupInit ""
-      logGitBackupInit "TIP: Add the deploy key shown above to your repository and restart the container."
-      logGitBackupInit "     Or set GIT_BACKUP_SSH_WAIT_TIMEOUT to a higher value to wait longer."
-    fi
+    logGitBackupInit ""
+    logGitBackupInit "TIP: Add the deploy key shown above to your repository and restart the container."
+    logGitBackupInit "     Or set GIT_BACKUP_SSH_WAIT_TIMEOUT to a higher value to wait longer."
     return 1
   fi
   logGitBackupInitAction "Fetch succeeded"

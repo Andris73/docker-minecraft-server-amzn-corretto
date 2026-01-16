@@ -22,7 +22,7 @@
 : "${GIT_BACKUP_RESTORE_ENABLED:=false}"
 : "${GIT_BACKUP_RESTORE_TARGET:=}"
 : "${GIT_BACKUP_GITIGNORE_ENABLED:=true}"
-: "${GIT_BACKUP_GITIGNORE_PATTERNS:=logs/,crash-reports/,cache/,bluemap/,libraries/,plugins/spark/}"
+: "${GIT_BACKUP_GITIGNORE_PATTERNS:=logs/,crash-reports/,cache/,bluemap/,libraries/,plugins/spark/,.ssh/}"
 : "${GIT_BACKUP_SSH_KEYGEN:=true}"
 : "${GIT_BACKUP_SSH_KEY_PATH:=${GIT_BACKUP_PATH}/.ssh}"
 
