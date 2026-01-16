@@ -33,9 +33,10 @@ Set `GIT_BACKUP_ENABLED` to `true` to enable the git backup daemon:
 | `GIT_BACKUP_PUSH_ENABLED` | `false` | Enable pushing commits to a remote repository |
 | `GIT_BACKUP_REMOTE` | `` | Remote repository URL (required if push enabled) |
 | `GIT_BACKUP_REMOTE_NAME` | `origin` | Name of the git remote |
-| `GIT_BACKUP_RESTORE_COMMIT` | `` | Restore to this commit on startup (empty = no restore) |
-| `GIT_BACKUP_AUTO_INIT` | `false` | Automatically initialize git repository if it doesn't exist |
-| `GIT_BACKUP_GITIGNORE_ENABLED` | `true` | Auto-generate `.gitignore` if it doesn't exist |
+| `GIT_BACKUP_INIT_MODE` | `` | How to initialize repo: `init` (fresh) or `clone` (from remote) |
+| `GIT_BACKUP_RESTORE_ENABLED` | `false` | Enable restore on boot (set to `false` after initial restore) |
+| `GIT_BACKUP_RESTORE_TARGET` | `` | Commit hash to restore to (empty = latest from remote) |
+| `GIT_BACKUP_GITIGNORE_ENABLED` | `true` | Auto-manage `.gitignore` based on patterns |
 | `GIT_BACKUP_GITIGNORE_PATTERNS` | `logs/,crash-reports/,cache/,bluemap/,libraries/,plugins/spark/` | Comma-separated patterns for auto-generated `.gitignore` |
 
 ## Backup Triggers
@@ -245,29 +246,86 @@ If you need to use a remote name other than `origin`:
 
 ## Setting Up the Git Repository
 
-Before using git backup, the backup path must be a git repository. There are several ways to set this up:
+Before using git backup, the backup path must be a git repository. Use `GIT_BACKUP_INIT_MODE` to control how the repository is set up.
 
-**Option 1: Automatic Initialization (Recommended)**
+### Option 1: Clone from Existing Remote (Recommended for Migration/Recovery)
 
-Set `GIT_BACKUP_AUTO_INIT` to `true` and the daemon will automatically initialize the git repository on first startup:
+If you already have a backup repository on GitHub, GitLab, or another remote, use `GIT_BACKUP_INIT_MODE=clone`:
 
 ``` yaml
     environment:
       GIT_BACKUP_ENABLED: "true"
-      GIT_BACKUP_AUTO_INIT: "true"
+      GIT_BACKUP_INIT_MODE: "clone"
+      GIT_BACKUP_REMOTE: "git@github.com:username/minecraft-backup.git"
+      GIT_BACKUP_LFS_ENABLED: "true"
+      GIT_BACKUP_TRIGGERS: "startup,last_disconnect"
+```
+
+This will:
+
+1. Initialize a new git repository
+2. Add the remote as `origin`
+3. Fetch all branches and history
+4. Checkout the default branch (or `GIT_BACKUP_BRANCH` if specified)
+5. Pull LFS files if enabled
+6. Automatically enable push to the same remote for future backups
+
+!!! tip "Use Cases"
+
+    - **Server Migration**: Moving your server to a new host
+    - **Disaster Recovery**: Restoring after data loss
+    - **New Instance**: Spinning up a copy of your server
+    - **Testing**: Creating a test server from production backup
+
+!!! note
+
+    `GIT_BACKUP_INIT_MODE=clone` only activates when no `.git` directory exists. Once the repository is initialized, this setting is ignored on subsequent starts.
+
+**Example with SSH key authentication:**
+
+``` yaml
+    environment:
+      GIT_BACKUP_ENABLED: "true"
+      GIT_BACKUP_INIT_MODE: "clone"
+      GIT_BACKUP_REMOTE: "git@github.com:username/minecraft-backup.git"
+      GIT_BACKUP_LFS_ENABLED: "true"
+      GIT_BACKUP_BRANCH: "main"
+    volumes:
+      - ~/.ssh/id_rsa:/home/minecraft/.ssh/id_rsa:ro
+      - ~/.ssh/known_hosts:/home/minecraft/.ssh/known_hosts:ro
+```
+
+**Example with HTTPS token:**
+
+``` yaml
+    environment:
+      GIT_BACKUP_ENABLED: "true"
+      GIT_BACKUP_INIT_MODE: "clone"
+      GIT_BACKUP_REMOTE: "https://<token>@github.com/username/minecraft-backup.git"
+      GIT_BACKUP_LFS_ENABLED: "true"
+```
+
+### Option 2: Fresh Initialization
+
+Use `GIT_BACKUP_INIT_MODE=init` to create a new empty repository:
+
+``` yaml
+    environment:
+      GIT_BACKUP_ENABLED: "true"
+      GIT_BACKUP_INIT_MODE: "init"
       GIT_BACKUP_LFS_ENABLED: "true"
 ```
 
 This will automatically run `git init` and `git lfs install` (if LFS is enabled) when the container starts.
 
-**Option 2: Mount an existing repository:**
+### Option 3: Mount an existing repository
 
 ``` yaml
     volumes:
       - /path/to/your/backup-repo:/data
 ```
 
-**Option 3: Initialize manually:**
+### Option 4: Initialize manually
 
 ```bash
 docker exec -u 1000 -it <container_name> bash
@@ -277,6 +335,37 @@ git lfs install  # if using LFS
 git remote add origin <your-remote-url>  # if pushing to remote
 exit
 ```
+
+## Restore on Boot
+
+Use `GIT_BACKUP_RESTORE_ENABLED` and `GIT_BACKUP_RESTORE_TARGET` to restore to a specific commit on each boot.
+
+| Variable | Description |
+|----------|-------------|
+| `GIT_BACKUP_RESTORE_ENABLED` | Set to `true` to enable restore on boot |
+| `GIT_BACKUP_RESTORE_TARGET` | Commit hash, tag, or branch to restore to |
+
+**Example: Restore to a specific commit on boot:**
+
+``` yaml
+    environment:
+      GIT_BACKUP_ENABLED: "true"
+      GIT_BACKUP_INIT_MODE: "clone"
+      GIT_BACKUP_REMOTE: "git@github.com:username/minecraft-backup.git"
+      GIT_BACKUP_RESTORE_ENABLED: "true"
+      GIT_BACKUP_RESTORE_TARGET: "abc1234"
+```
+
+!!! warning "Remember to disable after restore"
+
+    After restoring to your desired state, set `GIT_BACKUP_RESTORE_ENABLED: "false"` to prevent restoring on every boot. Otherwise, any new backups will be overwritten on the next restart.
+
+**Typical restore workflow:**
+
+1. Set `GIT_BACKUP_RESTORE_ENABLED: "true"` and `GIT_BACKUP_RESTORE_TARGET: "abc1234"`
+2. Start the container - it will restore to that commit
+3. Verify the server is working correctly
+4. Set `GIT_BACKUP_RESTORE_ENABLED: "false"` to resume normal backups
 
 !!! warning "File Ownership"
 
@@ -428,7 +517,20 @@ With Git LFS, only changed chunks are uploaded on each backup, making incrementa
 
 There are two ways to restore from a backup:
 
-### Method 1: Using the Restore Script (Recommended)
+### Method 1: Using Environment Variables (Recommended)
+
+For automated restore on container startup, use the environment variables described in the [Restore on Boot](#restore-on-boot) section above:
+
+``` yaml
+    environment:
+      GIT_BACKUP_ENABLED: "true"
+      GIT_BACKUP_RESTORE_ENABLED: "true"
+      GIT_BACKUP_RESTORE_TARGET: "abc1234"
+```
+
+After restoring, set `GIT_BACKUP_RESTORE_ENABLED: "false"` to resume normal backups.
+
+### Method 2: Using the Restore Script (Interactive)
 
 The `git-backup-restore.sh` script provides an easy way to manage and restore backups.
 
@@ -494,25 +596,6 @@ docker exec -it <container_name> /image/scripts/auto/git-backup-restore.sh diff 
 | `-f, --force` | Force restore without confirmation |
 | `-p, --path <path>` | Override backup path |
 | `-h, --help` | Show help message |
-
-### Method 2: Automatic Restore on Startup
-
-You can automatically restore to a specific commit when the container starts by setting `GIT_BACKUP_RESTORE_COMMIT`:
-
-``` yaml
-    environment:
-      GIT_BACKUP_ENABLED: "true"
-      GIT_BACKUP_RESTORE_COMMIT: "abc1234"  # Commit hash or reference
-```
-
-This is useful for:
-- Rolling back after a bad update
-- Deploying a known good state
-- Disaster recovery
-
-!!! warning
-
-    Remember to remove `GIT_BACKUP_RESTORE_COMMIT` after the restore completes, or the server will restore to that commit on every restart.
 
 ### Restore Examples
 

@@ -18,8 +18,9 @@
 : "${GIT_BACKUP_PUSH_ENABLED:=false}"
 : "${GIT_BACKUP_REMOTE:=}"
 : "${GIT_BACKUP_REMOTE_NAME:=origin}"
-: "${GIT_BACKUP_RESTORE_COMMIT:=}"
-: "${GIT_BACKUP_AUTO_INIT:=false}"
+: "${GIT_BACKUP_INIT_MODE:=}"
+: "${GIT_BACKUP_RESTORE_ENABLED:=false}"
+: "${GIT_BACKUP_RESTORE_TARGET:=}"
 : "${GIT_BACKUP_GITIGNORE_ENABLED:=true}"
 : "${GIT_BACKUP_GITIGNORE_PATTERNS:=logs/,crash-reports/,cache/,bluemap/,libraries/,plugins/spark/}"
 
@@ -42,15 +43,13 @@ is_trigger_enabled() {
   local trigger="$1"
   local triggers_list="${GIT_BACKUP_TRIGGERS}"
 
-  # Empty triggers means nothing is enabled
   if [[ -z "$triggers_list" ]]; then
     return 1
   fi
 
-  # Check if trigger is in the comma-separated list
   IFS=',' read -ra triggers_array <<< "$triggers_list"
   for t in "${triggers_array[@]}"; do
-    t=$(echo "$t" | xargs)  # trim whitespace
+    t=$(echo "$t" | xargs)
     if [[ "${t,,}" == "${trigger,,}" ]]; then
       return 0
     fi
@@ -74,8 +73,12 @@ check_git_lfs_installed() {
   return 0
 }
 
+configure_git_safe_directory() {
+  logGitBackup "Configuring git safe.directory for ${GIT_BACKUP_PATH}"
+  git config --global --add safe.directory "${GIT_BACKUP_PATH}" 2>/dev/null || true
+}
+
 generate_gitignore_content() {
-  # Generate the expected .gitignore content based on env var
   cat << 'EOF'
 # Git Backup - Auto-generated .gitignore
 # Managed by GIT_BACKUP_GITIGNORE_PATTERNS environment variable
@@ -86,7 +89,7 @@ EOF
   local patterns
   IFS=',' read -ra patterns <<< "${GIT_BACKUP_GITIGNORE_PATTERNS}"
   for pattern in "${patterns[@]}"; do
-    pattern=$(echo "$pattern" | xargs)  # trim whitespace
+    pattern=$(echo "$pattern" | xargs)
     if [[ -n "$pattern" ]]; then
       echo "${pattern}"
     fi
@@ -111,31 +114,25 @@ setup_gitignore() {
   local expected_content
   local current_content=""
 
-  # Generate expected content
   expected_content=$(generate_gitignore_content)
 
-  # Get current content if file exists
   if [[ -f "${gitignore_file}" ]]; then
     current_content=$(cat "${gitignore_file}")
   fi
 
-  # Compare content
   if [[ "${expected_content}" == "${current_content}" ]]; then
     logGitBackup ".gitignore is up to date"
     return 0
   fi
 
-  # Content differs - update the file
   if [[ -f "${gitignore_file}" ]]; then
     logGitBackup ".gitignore patterns changed, updating file..."
   else
     logGitBackup "Creating .gitignore file..."
   fi
 
-  # Write new content
   echo "${expected_content}" > "${gitignore_file}"
 
-  # Log the patterns
   local patterns
   IFS=',' read -ra patterns <<< "${GIT_BACKUP_GITIGNORE_PATTERNS}"
   for pattern in "${patterns[@]}"; do
@@ -145,15 +142,11 @@ setup_gitignore() {
     fi
   done
 
-  # Untrack files that are now ignored (remove from index but keep on disk)
   logGitBackup "Removing newly-ignored files from git tracking..."
   for pattern in "${patterns[@]}"; do
     pattern=$(echo "$pattern" | xargs)
     if [[ -n "$pattern" ]]; then
-      # Use git rm --cached to untrack without deleting
-      # The -r flag handles directories, --ignore-unmatch prevents errors if nothing matches
       if git rm -r --cached --ignore-unmatch "${pattern}" 2>/dev/null; then
-        # Check if anything was actually removed
         if ! git diff --cached --quiet -- "${pattern}" 2>/dev/null; then
           logGitBackup "  Untracked: ${pattern}"
         fi
@@ -161,20 +154,15 @@ setup_gitignore() {
     fi
   done
 
-  # Stage the .gitignore file
   git add .gitignore
 
-  # Check if there are changes to commit
   if ! git diff --cached --quiet 2>/dev/null; then
-    # Configure git author if not already set
     git config user.name "${GIT_BACKUP_AUTHOR_NAME}" 2>/dev/null
     git config user.email "${GIT_BACKUP_AUTHOR_EMAIL}" 2>/dev/null
 
-    # Commit the .gitignore changes
     local commit_msg="Update .gitignore patterns - $(date -Iseconds)"
     if git commit -m "${commit_msg}"; then
       logGitBackupAction ".gitignore committed successfully"
-      # Push if enabled (unless skip_push is set, e.g. during auto-init)
       if [[ "${skip_push}" != "true" ]]; then
         run_git_push
       fi
@@ -189,37 +177,25 @@ setup_gitignore() {
   return 0
 }
 
-auto_init_git_repo() {
-  if ! isTrue "${GIT_BACKUP_AUTO_INIT}"; then
-    return 1
-  fi
-
-  if [[ -d "${GIT_BACKUP_PATH}/.git" ]]; then
-    # Already initialized
-    return 0
-  fi
-
-  logGitBackup "Auto-initializing git repository in ${GIT_BACKUP_PATH}"
+# Initialize a fresh git repository (INIT_MODE=init)
+init_git_repo() {
+  logGitBackup "Initializing fresh git repository in ${GIT_BACKUP_PATH}"
 
   cd "${GIT_BACKUP_PATH}" || {
     logGitBackup "ERROR: Failed to change to ${GIT_BACKUP_PATH}"
     return 1
   }
 
-  # Initialize git
   if ! git init 2>&1; then
     logGitBackup "ERROR: Failed to initialize git repository"
     return 1
   fi
 
-  # Configure git user
   git config user.name "${GIT_BACKUP_AUTHOR_NAME}" 2>/dev/null
   git config user.email "${GIT_BACKUP_AUTHOR_EMAIL}" 2>/dev/null
 
-  # Create .gitignore (skip push since remote isn't set up yet)
   setup_gitignore true
 
-  # Initialize LFS if enabled
   if isTrue "${GIT_BACKUP_LFS_ENABLED}"; then
     if command -v git-lfs &> /dev/null; then
       logGitBackup "Initializing Git LFS..."
@@ -231,6 +207,220 @@ auto_init_git_repo() {
   return 0
 }
 
+# Clone from remote repository (INIT_MODE=clone)
+clone_from_remote() {
+  if [[ -z "${GIT_BACKUP_REMOTE}" ]]; then
+    logGitBackup "ERROR: GIT_BACKUP_INIT_MODE=clone requires GIT_BACKUP_REMOTE to be set"
+    return 1
+  fi
+
+  logGitBackup "Cloning from remote repository: ${GIT_BACKUP_REMOTE}"
+
+  cd "${GIT_BACKUP_PATH}" || {
+    logGitBackup "ERROR: Failed to change to ${GIT_BACKUP_PATH}"
+    return 1
+  }
+
+  logGitBackup "Initializing git repository..."
+  if ! git init 2>&1; then
+    logGitBackup "ERROR: Failed to initialize git repository"
+    return 1
+  fi
+
+  git config user.name "${GIT_BACKUP_AUTHOR_NAME}" 2>/dev/null
+  git config user.email "${GIT_BACKUP_AUTHOR_EMAIL}" 2>/dev/null
+
+  logGitBackup "Adding remote '${GIT_BACKUP_REMOTE_NAME}': ${GIT_BACKUP_REMOTE}"
+  if ! git remote add "${GIT_BACKUP_REMOTE_NAME}" "${GIT_BACKUP_REMOTE}" 2>&1; then
+    logGitBackup "ERROR: Failed to add remote"
+    return 1
+  fi
+
+  GIT_BACKUP_PUSH_ENABLED="true"
+
+  if isTrue "${GIT_BACKUP_LFS_ENABLED}"; then
+    if command -v git-lfs &> /dev/null; then
+      logGitBackup "Initializing Git LFS..."
+      git lfs install --local 2>&1 || logGitBackup "WARNING: Failed to initialize LFS"
+    fi
+  fi
+
+  logGitBackupAction "Fetching from remote..."
+  local fetch_output
+  local fetch_exit_code
+  fetch_output=$(git fetch "${GIT_BACKUP_REMOTE_NAME}" 2>&1)
+  fetch_exit_code=$?
+
+  if [[ $fetch_exit_code -ne 0 ]]; then
+    logGitBackupAction "Fetch FAILED (exit code: ${fetch_exit_code})"
+    if [[ -n "$fetch_output" ]]; then
+      logGitBackup "  Error details: ${fetch_output}"
+    fi
+    return 1
+  fi
+  logGitBackupAction "Fetch succeeded"
+
+  local branch_to_checkout="${GIT_BACKUP_BRANCH}"
+  if [[ -z "${branch_to_checkout}" ]]; then
+    branch_to_checkout=$(git remote show "${GIT_BACKUP_REMOTE_NAME}" 2>/dev/null | grep 'HEAD branch' | awk '{print $NF}')
+    if [[ -z "${branch_to_checkout}" ]]; then
+      if git rev-parse --verify "${GIT_BACKUP_REMOTE_NAME}/main" &>/dev/null; then
+        branch_to_checkout="main"
+      elif git rev-parse --verify "${GIT_BACKUP_REMOTE_NAME}/master" &>/dev/null; then
+        branch_to_checkout="master"
+      else
+        logGitBackup "ERROR: Could not determine branch to checkout"
+        logGitBackup "Hint: Set GIT_BACKUP_BRANCH to specify the branch"
+        return 1
+      fi
+    fi
+  fi
+
+  logGitBackup "Checking out branch: ${branch_to_checkout}"
+
+  if ! git checkout -b "${branch_to_checkout}" "${GIT_BACKUP_REMOTE_NAME}/${branch_to_checkout}" --force 2>&1; then
+    logGitBackup "Standard checkout failed, trying reset approach..."
+    git branch "${branch_to_checkout}" "${GIT_BACKUP_REMOTE_NAME}/${branch_to_checkout}" 2>/dev/null || true
+    git checkout "${branch_to_checkout}" 2>/dev/null || true
+  fi
+
+  logGitBackup "Resetting working directory to match remote..."
+  if ! git reset --hard "${GIT_BACKUP_REMOTE_NAME}/${branch_to_checkout}" 2>&1; then
+    logGitBackup "ERROR: Failed to reset to remote branch ${branch_to_checkout}"
+    return 1
+  fi
+
+  if [[ -n "${GIT_BACKUP_RESTORE_TARGET}" ]] && isTrue "${GIT_BACKUP_RESTORE_ENABLED}"; then
+    restore_to_target
+  fi
+
+  if isTrue "${GIT_BACKUP_LFS_ENABLED}"; then
+    logGitBackup "Pulling LFS files..."
+    if git lfs pull 2>&1; then
+      logGitBackupAction "LFS pull succeeded"
+    else
+      logGitBackup "WARNING: LFS pull failed (some large files may be missing)"
+    fi
+  fi
+
+  git branch --set-upstream-to="${GIT_BACKUP_REMOTE_NAME}/${branch_to_checkout}" "${branch_to_checkout}" 2>/dev/null
+
+  local commit_hash
+  local commit_date
+  local commit_msg
+  commit_hash=$(git rev-parse --short HEAD 2>/dev/null)
+  commit_date=$(git show -s --format="%ci" HEAD 2>/dev/null)
+  commit_msg=$(git show -s --format="%s" HEAD 2>/dev/null)
+
+  logGitBackupAction "Clone from remote completed successfully"
+  logGitBackup "  Branch:  ${branch_to_checkout}"
+  logGitBackup "  Commit:  ${commit_hash}"
+  logGitBackup "  Date:    ${commit_date}"
+  logGitBackup "  Message: ${commit_msg}"
+
+  setup_gitignore true
+
+  return 0
+}
+
+# Restore to a specific commit target
+restore_to_target() {
+  local target="${GIT_BACKUP_RESTORE_TARGET}"
+
+  if [[ -z "$target" ]]; then
+    return 0
+  fi
+
+  cd "${GIT_BACKUP_PATH}" || {
+    logGitBackup "ERROR: Failed to change to ${GIT_BACKUP_PATH}"
+    return 1
+  }
+
+  logGitBackup "Restoring to target: ${target}"
+
+  if ! git cat-file -e "${target}^{commit}" 2>/dev/null; then
+    logGitBackup "ERROR: Target '${target}' not found"
+    logGitBackup "Use 'git log --oneline' to see available commits"
+    return 1
+  fi
+
+  local target_hash
+  local target_date
+  local target_msg
+  target_hash=$(git rev-parse "${target}" 2>/dev/null)
+  target_date=$(git show -s --format="%ci" "${target}" 2>/dev/null)
+  target_msg=$(git show -s --format="%s" "${target}" 2>/dev/null)
+
+  logGitBackup "Restoring to:"
+  logGitBackup "  Commit:  ${target_hash}"
+  logGitBackup "  Date:    ${target_date}"
+  logGitBackup "  Message: ${target_msg}"
+
+  if ! git reset --hard "${target}" 2>&1; then
+    logGitBackup "ERROR: Failed to restore to target ${target}"
+    return 1
+  fi
+
+  if isTrue "${GIT_BACKUP_LFS_ENABLED}" && [[ -f ".gitattributes" ]]; then
+    logGitBackup "Pulling LFS files..."
+    git lfs pull 2>/dev/null || logGitBackup "WARNING: LFS pull failed"
+  fi
+
+  logGitBackupAction "Restore to target completed successfully"
+  logGitBackup "  Current HEAD: $(git rev-parse --short HEAD)"
+  return 0
+}
+
+# Handle repository initialization based on INIT_MODE
+handle_repo_init() {
+  if [[ -d "${GIT_BACKUP_PATH}/.git" ]]; then
+    return 0
+  fi
+
+  case "${GIT_BACKUP_INIT_MODE,,}" in
+    init)
+      init_git_repo
+      return $?
+      ;;
+    clone)
+      clone_from_remote
+      return $?
+      ;;
+    "")
+      logGitBackup "ERROR: ${GIT_BACKUP_PATH} is not a git repository"
+      logGitBackup "Hint: Set GIT_BACKUP_INIT_MODE=init to create a fresh repo"
+      logGitBackup "Hint: Set GIT_BACKUP_INIT_MODE=clone with GIT_BACKUP_REMOTE to clone from remote"
+      return 1
+      ;;
+    *)
+      logGitBackup "ERROR: Unknown GIT_BACKUP_INIT_MODE: ${GIT_BACKUP_INIT_MODE}"
+      logGitBackup "Valid values: init, clone"
+      return 1
+      ;;
+  esac
+}
+
+# Handle restore on boot (if enabled and repo exists)
+handle_restore_on_boot() {
+  if ! isTrue "${GIT_BACKUP_RESTORE_ENABLED}"; then
+    return 0
+  fi
+
+  if [[ -z "${GIT_BACKUP_RESTORE_TARGET}" ]]; then
+    logGitBackup "Restore enabled but no GIT_BACKUP_RESTORE_TARGET specified, skipping"
+    return 0
+  fi
+
+  if [[ ! -d "${GIT_BACKUP_PATH}/.git" ]]; then
+    logGitBackup "Cannot restore: no git repository exists"
+    return 1
+  fi
+
+  logGitBackupAction "Restore on boot enabled, restoring to: ${GIT_BACKUP_RESTORE_TARGET}"
+  restore_to_target
+  return $?
+}
+
 setup_git_lfs() {
   if ! isTrue "${GIT_BACKUP_LFS_ENABLED}"; then
     return 0
@@ -240,24 +430,21 @@ setup_git_lfs() {
 
   cd "${GIT_BACKUP_PATH}" || return 1
 
-  # Initialize LFS for this repository
   if ! git lfs install --local 2>/dev/null; then
     logGitBackup "ERROR: Failed to initialize git-lfs"
     return 1
   fi
 
-  # Track patterns
   local lfs_patterns
   IFS=',' read -ra lfs_patterns <<< "${GIT_BACKUP_LFS_PATTERNS}"
   for pattern in "${lfs_patterns[@]}"; do
-    pattern=$(echo "$pattern" | xargs)  # trim whitespace
+    pattern=$(echo "$pattern" | xargs)
     if [[ -n "$pattern" ]]; then
       logGitBackup "LFS tracking pattern: ${pattern}"
       git lfs track "${pattern}" 2>/dev/null || logGitBackup "WARNING: Failed to track ${pattern}"
     fi
   done
 
-  # Make sure .gitattributes is added
   if [[ -f ".gitattributes" ]]; then
     git add .gitattributes 2>/dev/null
   fi
@@ -280,7 +467,6 @@ setup_git_remote() {
 
   cd "${GIT_BACKUP_PATH}" || return 1
 
-  # Check if remote already exists
   local existing_remote
   existing_remote=$(git remote get-url "${GIT_BACKUP_REMOTE_NAME}" 2>/dev/null)
 
@@ -315,7 +501,6 @@ run_git_push() {
 
   cd "${GIT_BACKUP_PATH}" || return 1
 
-  # Determine branch to push
   local branch_to_push
   if [[ -n "${GIT_BACKUP_BRANCH}" ]]; then
     branch_to_push="${GIT_BACKUP_BRANCH}"
@@ -328,86 +513,32 @@ run_git_push() {
     return 1
   fi
 
-  # Push to remote
-  if git push "${GIT_BACKUP_REMOTE_NAME}" "${branch_to_push}" 2>&1; then
-    logGitBackupAction "Push successful"
+  local push_output
+  local push_exit_code
+  push_output=$(git push "${GIT_BACKUP_REMOTE_NAME}" "${branch_to_push}" 2>&1)
+  push_exit_code=$?
+
+  if [[ $push_exit_code -eq 0 ]]; then
+    logGitBackupAction "Push to '${GIT_BACKUP_REMOTE_NAME}/${branch_to_push}' succeeded"
+    if [[ -n "$push_output" ]] && [[ "$push_output" != "Everything up-to-date" ]]; then
+      logGitBackup "  Push output: ${push_output}"
+    fi
     return 0
   else
-    logGitBackup "ERROR: Failed to push to remote"
+    logGitBackupAction "Push to '${GIT_BACKUP_REMOTE_NAME}/${branch_to_push}' FAILED (exit code: ${push_exit_code})"
+    if [[ -n "$push_output" ]]; then
+      logGitBackup "  Error details: ${push_output}"
+    fi
     return 1
   fi
 }
 
 check_git_repo() {
   if [[ ! -d "${GIT_BACKUP_PATH}/.git" ]]; then
-    # Try auto-init if enabled
-    if isTrue "${GIT_BACKUP_AUTO_INIT}"; then
-      auto_init_git_repo
-      return $?
-    fi
-    logGitBackup "ERROR: ${GIT_BACKUP_PATH} is not a git repository"
-    logGitBackup "Hint: Set GIT_BACKUP_AUTO_INIT=true to automatically initialize"
-    return 1
+    handle_repo_init
+    return $?
   fi
   return 0
-}
-
-configure_git_safe_directory() {
-  # Add safe.directory to prevent "dubious ownership" errors
-  # This is needed when running as different users in containers
-  logGitBackup "Configuring git safe.directory for ${GIT_BACKUP_PATH}"
-  git config --global --add safe.directory "${GIT_BACKUP_PATH}" 2>/dev/null || true
-}
-
-restore_from_commit() {
-  local commit="${GIT_BACKUP_RESTORE_COMMIT}"
-
-  if [[ -z "$commit" ]]; then
-    return 0
-  fi
-
-  logGitBackup "Restore requested to commit: ${commit}"
-
-  cd "${GIT_BACKUP_PATH}" || {
-    logGitBackup "ERROR: Failed to change to ${GIT_BACKUP_PATH}"
-    return 1
-  }
-
-  # Verify commit exists
-  if ! git cat-file -e "${commit}^{commit}" 2>/dev/null; then
-    logGitBackup "ERROR: Commit '${commit}' not found"
-    logGitBackup "Use 'git log --oneline' to see available commits"
-    return 1
-  fi
-
-  # Get commit info for logging
-  local commit_hash
-  local commit_date
-  local commit_msg
-  commit_hash=$(git rev-parse "${commit}")
-  commit_date=$(git show -s --format="%ci" "${commit}")
-  commit_msg=$(git show -s --format="%s" "${commit}")
-
-  logGitBackup "Restoring to:"
-  logGitBackup "  Commit:  ${commit_hash}"
-  logGitBackup "  Date:    ${commit_date}"
-  logGitBackup "  Message: ${commit_msg}"
-
-  # Perform the restore
-  if git reset --hard "${commit}"; then
-    # If LFS is enabled, pull LFS files
-    if isTrue "${GIT_BACKUP_LFS_ENABLED}" && [[ -f ".gitattributes" ]]; then
-      logGitBackup "Pulling LFS files..."
-      git lfs pull 2>/dev/null || logGitBackup "WARNING: LFS pull failed"
-    fi
-
-    logGitBackupAction "Restore completed successfully"
-    logGitBackup "Server data restored to: $(git rev-parse --short HEAD)"
-    return 0
-  else
-    logGitBackup "ERROR: Failed to restore to commit ${commit}"
-    return 1
-  fi
 }
 
 has_changes() {
@@ -428,7 +559,6 @@ run_git_backup() {
     return 1
   }
 
-  # Switch branch if specified
   if [[ -n "${GIT_BACKUP_BRANCH}" ]]; then
     current_branch=$(git branch --show-current 2>/dev/null)
     if [[ "${current_branch}" != "${GIT_BACKUP_BRANCH}" ]]; then
@@ -443,15 +573,13 @@ run_git_backup() {
     fi
   fi
 
-  # Configure git author if not already set
   git config user.name "${GIT_BACKUP_AUTHOR_NAME}" 2>/dev/null
   git config user.email "${GIT_BACKUP_AUTHOR_EMAIL}" 2>/dev/null
 
-  # Add files (use -A to include deletions and modifications)
   local add_paths
   IFS=',' read -ra add_paths <<< "${GIT_BACKUP_ADD_PATHS}"
   for path in "${add_paths[@]}"; do
-    path=$(echo "$path" | xargs)  # trim whitespace
+    path=$(echo "$path" | xargs)
     if [[ -n "$path" ]]; then
       logGitBackup "Adding path: ${path}"
       if ! git add -A "${path}" 2>&1; then
@@ -460,12 +588,11 @@ run_git_backup() {
     fi
   done
 
-  # Handle exclusions by unstaging
   if [[ -n "${GIT_BACKUP_EXCLUDE_PATHS}" ]]; then
     local exclude_paths
     IFS=',' read -ra exclude_paths <<< "${GIT_BACKUP_EXCLUDE_PATHS}"
     for path in "${exclude_paths[@]}"; do
-      path=$(echo "$path" | xargs)  # trim whitespace
+      path=$(echo "$path" | xargs)
       if [[ -n "$path" ]]; then
         logGitBackup "Excluding path: ${path}"
         git reset HEAD -- "${path}" >/dev/null 2>&1 || true
@@ -473,9 +600,7 @@ run_git_backup() {
     done
   fi
 
-  # Check if there are staged changes
   if ! git diff --cached --quiet 2>/dev/null; then
-    # Generate commit message with date substitution
     local commit_msg="${GIT_BACKUP_COMMIT_MSG}"
     commit_msg="${commit_msg//%DATE%/$(date -Iseconds)}"
     commit_msg="${commit_msg//%REASON%/${reason}}"
@@ -495,35 +620,32 @@ run_git_backup() {
   fi
 }
 
-# Exit if not enabled
+# ============================================================================
+# MAIN EXECUTION
+# ============================================================================
+
 if ! isTrue "${GIT_BACKUP_ENABLED}"; then
   logGitBackup "Git backup is disabled, exiting"
   exit 0
 fi
 
-# Validate prerequisites
 if ! check_git_installed; then
   exit 1
 fi
+
+configure_git_safe_directory
 
 if ! check_git_repo; then
   logGitBackup "Hint: Initialize a git repo with 'git init ${GIT_BACKUP_PATH}'"
   exit 1
 fi
 
-# Configure safe.directory to prevent ownership issues
-configure_git_safe_directory
-
-# Restore from commit if requested
-if [[ -n "${GIT_BACKUP_RESTORE_COMMIT}" ]]; then
-  if ! restore_from_commit; then
-    logGitBackup "ERROR: Restore failed, continuing with current state"
+if isTrue "${GIT_BACKUP_RESTORE_ENABLED}"; then
+  if ! handle_restore_on_boot; then
+    logGitBackup "ERROR: Restore on boot failed, continuing with current state"
   fi
-  # Clear the variable so we don't restore again on next iteration
-  GIT_BACKUP_RESTORE_COMMIT=""
 fi
 
-# Validate LFS if enabled
 if isTrue "${GIT_BACKUP_LFS_ENABLED}"; then
   if ! check_git_lfs_installed; then
     exit 1
@@ -532,6 +654,11 @@ fi
 
 logGitBackup "Git backup daemon starting"
 logGitBackup "  Backup path: ${GIT_BACKUP_PATH}"
+logGitBackup "  Init mode: ${GIT_BACKUP_INIT_MODE:-none}"
+logGitBackup "  Restore enabled: ${GIT_BACKUP_RESTORE_ENABLED}"
+if isTrue "${GIT_BACKUP_RESTORE_ENABLED}"; then
+  logGitBackup "  Restore target: ${GIT_BACKUP_RESTORE_TARGET:-latest}"
+fi
 logGitBackup "  Triggers: ${GIT_BACKUP_TRIGGERS:-none}"
 logGitBackup "  Period: ${GIT_BACKUP_PERIOD}s (0=disabled)"
 logGitBackup "  LFS enabled: ${GIT_BACKUP_LFS_ENABLED}"
@@ -589,7 +716,6 @@ do
 
   case X$STATE in
   XINIT)
-    # Server startup
     if mc_server_listening ; then
       logGitBackup "Minecraft server is listening"
 
@@ -598,7 +724,6 @@ do
         LAST_BACKUP_TIME=$CURRENT_TIME
       fi
 
-      # Check if we need to continue running
       if [[ -z "${GIT_BACKUP_TRIGGERS}" ]] && [[ "${GIT_BACKUP_PERIOD}" -eq 0 ]]; then
         logGitBackup "No backup triggers configured, stopping daemon"
         exit 0
@@ -610,7 +735,6 @@ do
   XRUNNING)
     CURR_CLIENTCONNECTIONS=$(java_clients_connections)
 
-    # Check for periodic backup
     if [[ "${GIT_BACKUP_PERIOD}" -gt 0 ]]; then
       TIME_SINCE_BACKUP=$((CURRENT_TIME - LAST_BACKUP_TIME))
       if [[ $TIME_SINCE_BACKUP -ge ${GIT_BACKUP_PERIOD} ]]; then
@@ -624,7 +748,6 @@ do
       fi
     fi
 
-    # Check for first_join backup
     if is_trigger_enabled "first_join"; then
       if (( CURR_CLIENTCONNECTIONS > 0 )) && [[ "$FIRST_JOIN_DONE" == "false" ]]; then
         logGitBackupAction "First player joined, running backup"
@@ -632,13 +755,11 @@ do
         LAST_BACKUP_TIME=$CURRENT_TIME
         FIRST_JOIN_DONE=true
       fi
-      # Reset first_join flag when all players leave
       if (( CURR_CLIENTCONNECTIONS == 0 )); then
         FIRST_JOIN_DONE=false
       fi
     fi
 
-    # Check for on_connect backup (any player joins)
     if is_trigger_enabled "on_connect"; then
       if (( CURR_CLIENTCONNECTIONS > CLIENTCONNECTIONS )); then
         logGitBackupAction "Player connected, running backup"
@@ -647,7 +768,6 @@ do
       fi
     fi
 
-    # Check for on_disconnect backup (any player leaves)
     if is_trigger_enabled "on_disconnect"; then
       if (( CURR_CLIENTCONNECTIONS < CLIENTCONNECTIONS )) && (( CLIENTCONNECTIONS > 0 )); then
         logGitBackupAction "Player disconnected, running backup"
@@ -656,7 +776,6 @@ do
       fi
     fi
 
-    # Check for last_disconnect backup
     if is_trigger_enabled "last_disconnect"; then
       if (( CURR_CLIENTCONNECTIONS == 0 )) && (( CLIENTCONNECTIONS > 0 )); then
         logGitBackupAction "All players disconnected, running backup"
