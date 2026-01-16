@@ -917,24 +917,40 @@ if ! check_git_installed; then
   exit 1
 fi
 
-# Setup SSH keys before any git operations (if using SSH remote)
-if is_ssh_remote "${GIT_BACKUP_REMOTE}"; then
-  if ! setup_ssh_keys; then
-    logGitBackup "WARNING: SSH key setup failed, remote operations may fail"
+# Check if initialization was already done by git-backup-init.sh
+# This happens when clone/restore runs blocking before the daemon starts
+if isTrue "${GIT_BACKUP_INIT_COMPLETE:-false}"; then
+  logGitBackup "Initialization already completed by git-backup-init.sh"
+else
+  # Setup SSH keys before any git operations (if using SSH remote)
+  if is_ssh_remote "${GIT_BACKUP_REMOTE}"; then
+    if ! setup_ssh_keys; then
+      logGitBackup "WARNING: SSH key setup failed, remote operations may fail"
+    fi
+  fi
+
+  configure_git_safe_directory
+
+  if ! check_git_repo; then
+    logGitBackup "Hint: Initialize a git repo with 'git init ${GIT_BACKUP_PATH}'"
+    exit 1
+  fi
+
+  if isTrue "${GIT_BACKUP_RESTORE_ENABLED}"; then
+    if ! handle_restore_on_boot; then
+      logGitBackup "ERROR: Restore on boot failed, continuing with current state"
+    fi
   fi
 fi
 
+# Always configure safe directory (in case daemon restarts)
 configure_git_safe_directory
 
-if ! check_git_repo; then
-  logGitBackup "Hint: Initialize a git repo with 'git init ${GIT_BACKUP_PATH}'"
+# Verify repo exists (might have been created by init script)
+if [[ ! -d "${GIT_BACKUP_PATH}/.git" ]]; then
+  logGitBackup "ERROR: No git repository found at ${GIT_BACKUP_PATH}"
+  logGitBackup "Hint: Set GIT_BACKUP_INIT_MODE=clone or GIT_BACKUP_INIT_MODE=init"
   exit 1
-fi
-
-if isTrue "${GIT_BACKUP_RESTORE_ENABLED}"; then
-  if ! handle_restore_on_boot; then
-    logGitBackup "ERROR: Restore on boot failed, continuing with current state"
-  fi
 fi
 
 if isTrue "${GIT_BACKUP_LFS_ENABLED}"; then

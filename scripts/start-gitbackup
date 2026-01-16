@@ -23,6 +23,8 @@
 : "${GIT_BACKUP_RESTORE_TARGET:=}"
 : "${GIT_BACKUP_GITIGNORE_ENABLED:=true}"
 : "${GIT_BACKUP_GITIGNORE_PATTERNS:=logs/,crash-reports/,cache/,bluemap/,libraries/,plugins/spark/}"
+: "${GIT_BACKUP_SSH_KEYGEN:=true}"
+: "${GIT_BACKUP_SSH_KEY_PATH:=${GIT_BACKUP_PATH}/.ssh}"
 : "${SERVER_PORT:=25565}"
 
 export GIT_BACKUP_ENABLED
@@ -45,6 +47,8 @@ export GIT_BACKUP_RESTORE_ENABLED
 export GIT_BACKUP_RESTORE_TARGET
 export GIT_BACKUP_GITIGNORE_ENABLED
 export GIT_BACKUP_GITIGNORE_PATTERNS
+export GIT_BACKUP_SSH_KEYGEN
+export GIT_BACKUP_SSH_KEY_PATH
 export SERVER_PORT
 
 if ! isTrue "${GIT_BACKUP_ENABLED}"; then
@@ -57,4 +61,23 @@ isDebugging && set -x
 
 isNumericElseSetToDefault GIT_BACKUP_PERIOD 0
 
+# For clone/restore scenarios, we need to run the initialization BLOCKING
+# so that files are fully restored before the server tries to start
+if [[ "${GIT_BACKUP_INIT_MODE,,}" == "clone" ]] || isTrue "${GIT_BACKUP_RESTORE_ENABLED}"; then
+  log "Running Git backup initialization (blocking for clone/restore)..."
+  
+  # Run the init script which handles clone, restore, and initial setup
+  # This runs BLOCKING to ensure files are restored before server continues
+  if "$(dirname "$0")/auto/git-backup-init.sh"; then
+    log "Git backup initialization completed successfully"
+    # Mark that init is complete so daemon skips redundant init
+    GIT_BACKUP_INIT_COMPLETE="true"
+  else
+    log "WARNING: Git backup initialization had errors, check logs above"
+    GIT_BACKUP_INIT_COMPLETE="false"
+  fi
+  export GIT_BACKUP_INIT_COMPLETE
+fi
+
+# Start the daemon in background for ongoing backup operations
 "$(dirname "$0")/auto/git-backup-daemon.sh" &

@@ -40,6 +40,8 @@ Set `GIT_BACKUP_ENABLED` to `true` to enable the git backup daemon:
 | `GIT_BACKUP_GITIGNORE_PATTERNS` | `logs/,crash-reports/,cache/,bluemap/,libraries/,plugins/spark/` | Comma-separated patterns for auto-generated `.gitignore` |
 | `GIT_BACKUP_SSH_KEYGEN` | `true` | Auto-generate SSH key pair for SSH remotes (deploy key) |
 | `GIT_BACKUP_SSH_KEY_PATH` | `/data/.ssh` | Path to store generated SSH keys |
+| `GIT_BACKUP_SSH_WAIT_TIMEOUT` | `300` | Seconds to wait for deploy key to be added on first run (0 = don't wait) |
+| `GIT_BACKUP_SSH_RETRY_INTERVAL` | `10` | Seconds between retry attempts when waiting for deploy key |
 
 ## Backup Triggers
 
