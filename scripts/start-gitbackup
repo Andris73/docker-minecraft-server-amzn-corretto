@@ -14,7 +14,7 @@
 : "${GIT_BACKUP_AUTHOR_NAME:=Minecraft Server}"
 : "${GIT_BACKUP_AUTHOR_EMAIL:=minecraft@server.local}"
 : "${GIT_BACKUP_LFS_ENABLED:=false}"
-: "${GIT_BACKUP_LFS_PATTERNS:=*.mca,*.jar,*.zip,*.dat,*.dat_old,*.nbt}"
+: "${GIT_BACKUP_LFS_PATTERNS:=*.mca,*.jar,*.zip,*.dat,*.dat_old,*.nbt,*.sqlite,*.sqlite-shm,*.sqlite-wal}"
 : "${GIT_BACKUP_PUSH_ENABLED:=false}"
 : "${GIT_BACKUP_REMOTE:=}"
 : "${GIT_BACKUP_REMOTE_NAME:=origin}"

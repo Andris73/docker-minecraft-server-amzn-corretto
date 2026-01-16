@@ -29,7 +29,7 @@ Set `GIT_BACKUP_ENABLED` to `true` to enable the git backup daemon:
 | `GIT_BACKUP_AUTHOR_NAME` | `Minecraft Server` | Git author name for commits |
 | `GIT_BACKUP_AUTHOR_EMAIL` | `minecraft@server.local` | Git author email for commits |
 | `GIT_BACKUP_LFS_ENABLED` | `false` | Enable Git LFS for large files |
-| `GIT_BACKUP_LFS_PATTERNS` | `*.mca,*.jar,*.zip,*.dat,*.dat_old,*.nbt` | Comma-separated file patterns to track with LFS |
+| `GIT_BACKUP_LFS_PATTERNS` | `*.mca,*.jar,*.zip,*.dat,*.dat_old,*.nbt,*.sqlite,*.sqlite-shm,*.sqlite-wal` | Comma-separated file patterns to track with LFS |
 | `GIT_BACKUP_PUSH_ENABLED` | `false` | Enable pushing commits to a remote repository |
 | `GIT_BACKUP_REMOTE` | `` | Remote repository URL (required if push enabled) |
 | `GIT_BACKUP_REMOTE_NAME` | `origin` | Name of the git remote |

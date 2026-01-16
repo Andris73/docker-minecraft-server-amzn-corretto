@@ -69,7 +69,12 @@ check_git_repo() {
 }
 
 configure_safe_directory() {
-  git config --global --add safe.directory "${GIT_BACKUP_PATH}" 2>/dev/null || true
+  # Check if already configured to avoid duplicating entries
+  local current_dirs
+  current_dirs=$(git config --global --get-all safe.directory 2>/dev/null || true)
+  if [[ "$current_dirs" != *"${GIT_BACKUP_PATH}"* ]]; then
+    git config --global --add safe.directory "${GIT_BACKUP_PATH}" 2>/dev/null || true
+  fi
 }
 
 list_backups() {

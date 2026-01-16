@@ -14,7 +14,7 @@
 : "${GIT_BACKUP_AUTHOR_NAME:=Minecraft Server}"
 : "${GIT_BACKUP_AUTHOR_EMAIL:=minecraft@server.local}"
 : "${GIT_BACKUP_LFS_ENABLED:=false}"
-: "${GIT_BACKUP_LFS_PATTERNS:=*.mca,*.jar,*.zip,*.dat,*.dat_old,*.nbt}"
+: "${GIT_BACKUP_LFS_PATTERNS:=*.mca,*.jar,*.zip,*.dat,*.dat_old,*.nbt,*.sqlite,*.sqlite-shm,*.sqlite-wal}"
 : "${GIT_BACKUP_PUSH_ENABLED:=false}"
 : "${GIT_BACKUP_REMOTE:=}"
 : "${GIT_BACKUP_REMOTE_NAME:=origin}"
@@ -214,8 +214,13 @@ EOF
 }
 
 configure_git_safe_directory() {
-  logGitBackup "Configuring git safe.directory for ${GIT_BACKUP_PATH}"
-  git config --global --add safe.directory "${GIT_BACKUP_PATH}" 2>/dev/null || true
+  # Check if already configured to avoid duplicating entries
+  local current_dirs
+  current_dirs=$(git config --global --get-all safe.directory 2>/dev/null || true)
+  if [[ "$current_dirs" != *"${GIT_BACKUP_PATH}"* ]]; then
+    logGitBackup "Configuring git safe.directory for ${GIT_BACKUP_PATH}"
+    git config --global --add safe.directory "${GIT_BACKUP_PATH}" 2>/dev/null || true
+  fi
 }
 
 generate_gitignore_content() {
