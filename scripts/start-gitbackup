@@ -20,6 +20,8 @@
 : "${GIT_BACKUP_REMOTE_NAME:=origin}"
 : "${GIT_BACKUP_RESTORE_COMMIT:=}"
 : "${GIT_BACKUP_AUTO_INIT:=false}"
+: "${GIT_BACKUP_GITIGNORE_ENABLED:=true}"
+: "${GIT_BACKUP_GITIGNORE_PATTERNS:=logs/,crash-reports/,cache/,bluemap/,libraries/,plugins/spark/}"
 : "${SERVER_PORT:=25565}"
 
 export GIT_BACKUP_ENABLED
@@ -39,6 +41,8 @@ export GIT_BACKUP_REMOTE
 export GIT_BACKUP_REMOTE_NAME
 export GIT_BACKUP_RESTORE_COMMIT
 export GIT_BACKUP_AUTO_INIT
+export GIT_BACKUP_GITIGNORE_ENABLED
+export GIT_BACKUP_GITIGNORE_PATTERNS
 export SERVER_PORT
 
 if ! isTrue "${GIT_BACKUP_ENABLED}"; then

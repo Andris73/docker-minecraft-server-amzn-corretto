@@ -35,6 +35,8 @@ Set `GIT_BACKUP_ENABLED` to `true` to enable the git backup daemon:
 | `GIT_BACKUP_REMOTE_NAME` | `origin` | Name of the git remote |
 | `GIT_BACKUP_RESTORE_COMMIT` | `` | Restore to this commit on startup (empty = no restore) |
 | `GIT_BACKUP_AUTO_INIT` | `false` | Automatically initialize git repository if it doesn't exist |
+| `GIT_BACKUP_GITIGNORE_ENABLED` | `true` | Auto-generate `.gitignore` if it doesn't exist |
+| `GIT_BACKUP_GITIGNORE_PATTERNS` | `logs/,crash-reports/,cache/,bluemap/,libraries/,plugins/spark/` | Comma-separated patterns for auto-generated `.gitignore` |
 
 ## Backup Triggers
 
@@ -306,7 +308,64 @@ exit
 
 ## Excluding Files with .gitignore
 
-For better control over what gets backed up, create a `.gitignore` file in your data directory:
+The git backup daemon can automatically create a `.gitignore` file with sensible defaults for Minecraft servers. This is enabled by default.
+
+### Automatic .gitignore Management
+
+When `GIT_BACKUP_GITIGNORE_ENABLED` is `true` (the default), the `.gitignore` file is automatically managed based on the `GIT_BACKUP_GITIGNORE_PATTERNS` environment variable.
+
+**Key behaviors:**
+
+1. **Auto-creation**: If `.gitignore` doesn't exist, it will be created automatically
+2. **Auto-update**: When `GIT_BACKUP_GITIGNORE_PATTERNS` changes, the file is updated to match
+3. **Auto-commit**: Changes to `.gitignore` are committed immediately so they take effect
+4. **Auto-untrack**: Files matching new ignore patterns are automatically removed from git tracking (but not deleted from disk)
+
+!!! note "Why auto-commit?"
+
+    In Git, `.gitignore` only affects *untracked* files. Once a file is tracked, adding it to `.gitignore` has no effect until you explicitly untrack it. The daemon handles this automatically by:
+    
+    1. Updating the `.gitignore` file
+    2. Running `git rm --cached` on newly-ignored patterns to untrack them
+    3. Committing both changes together
+    4. Pushing to remote (if enabled)
+
+**Default patterns excluded:**
+
+| Pattern | Description |
+|---------|-------------|
+| `logs/` | Server log files |
+| `crash-reports/` | Crash report files |
+| `cache/` | Various cache directories |
+| `bluemap/` | BlueMap web map data (large, can be regenerated) |
+| `libraries/` | Downloaded library files |
+| `plugins/spark/` | Spark profiler data |
+
+### Customizing .gitignore Patterns
+
+You can customize the patterns via environment variable:
+
+``` yaml
+    environment:
+      GIT_BACKUP_GITIGNORE_PATTERNS: "logs/,crash-reports/,cache/,*.tmp,dynmap/"
+```
+
+### Disabling Auto-Management
+
+If you want to manage `.gitignore` manually, disable auto-management:
+
+``` yaml
+    environment:
+      GIT_BACKUP_GITIGNORE_ENABLED: "false"
+```
+
+!!! warning
+
+    When `GIT_BACKUP_GITIGNORE_ENABLED` is `true`, the daemon **will overwrite** any existing `.gitignore` if it differs from the expected content based on `GIT_BACKUP_GITIGNORE_PATTERNS`. Set it to `false` if you want full manual control.
+
+### Manual .gitignore
+
+With `GIT_BACKUP_GITIGNORE_ENABLED: "false"`, you can create and manage your own `.gitignore`:
 
 ```
 # Logs and crash reports
@@ -314,12 +373,35 @@ logs/
 crash-reports/
 
 # Cache and temp files
+cache/
 *.tmp
 *.lock
 
-# Large files that change frequently
-*.jar
+# Map plugins (large, regeneratable)
+bluemap/
+dynmap/
+
+# Profiler data
+plugins/spark/
+
+# Downloaded libraries
+libraries/
 ```
+
+### .gitignore vs GIT_BACKUP_EXCLUDE_PATHS
+
+Both methods exclude files, but they work differently:
+
+| Feature | `.gitignore` | `GIT_BACKUP_EXCLUDE_PATHS` |
+|---------|--------------|----------------------------|
+| **Scope** | Affects all git operations | Only affects backup commits |
+| **Persistence** | Committed to repo | Runtime only |
+| **Untracking** | Auto-untracks when patterns added | Unstages per-commit |
+| **Recommended for** | Files you never want in history | Temporary exclusions |
+
+!!! tip
+
+    Use `GIT_BACKUP_GITIGNORE_PATTERNS` for permanent exclusions (logs, caches, generated files) and `GIT_BACKUP_EXCLUDE_PATHS` for situational exclusions you might change frequently.
 
 !!! tip
 
