@@ -25,6 +25,8 @@
 : "${GIT_BACKUP_GITIGNORE_PATTERNS:=logs/,crash-reports/,cache/,bluemap/,libraries/,plugins/spark/,.ssh/}"
 : "${GIT_BACKUP_SSH_KEYGEN:=true}"
 : "${GIT_BACKUP_SSH_KEY_PATH:=${GIT_BACKUP_PATH}/.ssh}"
+: "${GIT_BACKUP_SSH_WAIT_TIMEOUT:=300}"
+: "${GIT_BACKUP_SSH_RETRY_INTERVAL:=10}"
 : "${SERVER_PORT:=25565}"
 
 export GIT_BACKUP_ENABLED
@@ -49,6 +51,8 @@ export GIT_BACKUP_GITIGNORE_ENABLED
 export GIT_BACKUP_GITIGNORE_PATTERNS
 export GIT_BACKUP_SSH_KEYGEN
 export GIT_BACKUP_SSH_KEY_PATH
+export GIT_BACKUP_SSH_WAIT_TIMEOUT
+export GIT_BACKUP_SSH_RETRY_INTERVAL
 export SERVER_PORT
 
 if ! isTrue "${GIT_BACKUP_ENABLED}"; then
@@ -61,13 +65,34 @@ isDebugging && set -x
 
 isNumericElseSetToDefault GIT_BACKUP_PERIOD 0
 
-# For clone/restore scenarios, we need to run the initialization BLOCKING
-# so that files are fully restored before the server tries to start
-if [[ "${GIT_BACKUP_INIT_MODE,,}" == "clone" ]] || isTrue "${GIT_BACKUP_RESTORE_ENABLED}"; then
-  log "Running Git backup initialization (blocking for clone/restore)..."
-  
+# Helper function to check if remote URL uses SSH
+is_ssh_remote() {
+  local url="$1"
+  [[ "$url" =~ ^git@ ]] || [[ "$url" =~ ^ssh:// ]]
+}
+
+# Determine if we need blocking initialization:
+# - clone mode: always blocking (need to fetch files before server starts)
+# - restore enabled: always blocking (need to restore files before server starts)
+# - init mode with push enabled and SSH remote: blocking (need to wait for deploy key)
+needs_blocking_init=false
+
+if [[ "${GIT_BACKUP_INIT_MODE,,}" == "clone" ]]; then
+  needs_blocking_init=true
+  log "Blocking init required: clone mode"
+elif isTrue "${GIT_BACKUP_RESTORE_ENABLED}"; then
+  needs_blocking_init=true
+  log "Blocking init required: restore enabled"
+elif [[ "${GIT_BACKUP_INIT_MODE,,}" == "init" ]] && isTrue "${GIT_BACKUP_PUSH_ENABLED}" && is_ssh_remote "${GIT_BACKUP_REMOTE}"; then
+  needs_blocking_init=true
+  log "Blocking init required: init mode with SSH push (waiting for deploy key)"
+fi
+
+if [[ "$needs_blocking_init" == "true" ]]; then
+  log "Running Git backup initialization (blocking)..."
+
   # Run the init script which handles clone, restore, and initial setup
-  # This runs BLOCKING to ensure files are restored before server continues
+  # This runs BLOCKING to ensure files are restored/SSH is configured before server continues
   if "$(dirname "$0")/auto/git-backup-init.sh"; then
     log "Git backup initialization completed successfully"
     # Mark that init is complete so daemon skips redundant init

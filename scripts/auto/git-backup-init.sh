@@ -14,6 +14,7 @@
 : "${GIT_BACKUP_INIT_MODE:=}"
 : "${GIT_BACKUP_RESTORE_ENABLED:=false}"
 : "${GIT_BACKUP_RESTORE_TARGET:=}"
+: "${GIT_BACKUP_PUSH_ENABLED:=false}"
 : "${GIT_BACKUP_LFS_ENABLED:=false}"
 : "${GIT_BACKUP_LFS_PATTERNS:=*.mca,*.jar,*.zip,*.dat,*.dat_old,*.nbt,*.sqlite,*.sqlite-shm,*.sqlite-wal}"
 : "${GIT_BACKUP_AUTHOR_NAME:=Minecraft Server}"
@@ -43,13 +44,13 @@ is_ssh_remote() {
 get_ssh_hostname() {
   local url="$1"
   local hostname=""
-  
+
   if [[ "$url" =~ ^git@([^:]+): ]]; then
     hostname="${BASH_REMATCH[1]}"
   elif [[ "$url" =~ ^ssh://([^@]+@)?([^:/]+) ]]; then
     hostname="${BASH_REMATCH[2]}"
   fi
-  
+
   echo "$hostname"
 }
 
@@ -123,7 +124,7 @@ EOF
       ssh-keyscan -t ed25519,rsa gitlab.com 2>/dev/null
       ssh-keyscan -t ed25519,rsa bitbucket.org 2>/dev/null
     } > "${known_hosts}" 2>/dev/null
-    
+
     if [[ -n "$hostname" ]] && [[ "$hostname" != "github.com" ]] && [[ "$hostname" != "gitlab.com" ]] && [[ "$hostname" != "bitbucket.org" ]]; then
       logGitBackupInit "Fetching SSH host key for: ${hostname}"
       ssh-keyscan -t ed25519,rsa "${hostname}" >> "${known_hosts}" 2>/dev/null || true
@@ -146,7 +147,7 @@ EOF
     logGitBackupInit ""
   fi
   logGitBackupInit "============================================================"
-  
+
   if [[ "$key_generated" == "true" ]]; then
     logGitBackupInit "NOTE: This is a NEW key. You must add it to your Git provider!"
     logGitBackupInit ""
@@ -204,7 +205,7 @@ clone_from_remote() {
   # Add or update remote
   local existing_remote
   existing_remote=$(git remote get-url "${GIT_BACKUP_REMOTE_NAME}" 2>/dev/null)
-  
+
   if [[ -z "${existing_remote}" ]]; then
     logGitBackupInit "Adding remote '${GIT_BACKUP_REMOTE_NAME}': ${GIT_BACKUP_REMOTE}"
     if ! git remote add "${GIT_BACKUP_REMOTE_NAME}" "${GIT_BACKUP_REMOTE}" 2>&1; then
@@ -266,11 +267,11 @@ clone_from_remote() {
         sleep "${retry_interval}"
         waited_time=$((waited_time + retry_interval))
         fetch_attempts=$((fetch_attempts + 1))
-        
+
         logGitBackupInit "Retry attempt ${fetch_attempts} (waited ${waited_time}s of ${max_wait_time}s)..."
         fetch_output=$(git fetch "${GIT_BACKUP_REMOTE_NAME}" 2>&1)
         fetch_exit_code=$?
-        
+
         if [[ $fetch_exit_code -eq 0 ]]; then
           logGitBackupInit ""
           logGitBackupInit "============================================================"
@@ -278,7 +279,7 @@ clone_from_remote() {
           logGitBackupInit "============================================================"
           break
         fi
-        
+
         if [[ "$fetch_output" != *"Permission denied"* ]] && [[ "$fetch_output" != *"publickey"* ]]; then
           # Different error, stop waiting
           logGitBackupInit "Fetch failed with different error, stopping retry"
@@ -392,6 +393,149 @@ init_git_repo() {
   return 0
 }
 
+# Wait for deploy key to be accepted by the remote
+# This is called when we need to verify SSH access before continuing
+wait_for_deploy_key() {
+  local max_wait_time="${GIT_BACKUP_SSH_WAIT_TIMEOUT}"
+  local retry_interval="${GIT_BACKUP_SSH_RETRY_INTERVAL}"
+  local waited_time=0
+  local fetch_attempts=0
+
+  cd "${GIT_BACKUP_PATH}" || return 1
+
+  # Test SSH access with a fetch
+  logGitBackupInitAction "Testing SSH access to remote..."
+  local fetch_output
+  local fetch_exit_code
+  fetch_output=$(git fetch "${GIT_BACKUP_REMOTE_NAME}" 2>&1)
+  fetch_exit_code=$?
+
+  # If fetch succeeded or it's not a permission error, return
+  if [[ $fetch_exit_code -eq 0 ]]; then
+    logGitBackupInit "SSH access verified successfully"
+    return 0
+  fi
+
+  # Check if it's a permission denied error
+  if [[ "$fetch_output" != *"Permission denied"* ]] && [[ "$fetch_output" != *"publickey"* ]]; then
+    # Different error (e.g., repo doesn't exist yet) - that's OK for init mode
+    logGitBackupInit "Remote access check: ${fetch_output}"
+    logGitBackupInit "Continuing (remote repository may not exist yet)"
+    return 0
+  fi
+
+  # Permission denied - wait for deploy key
+  logGitBackupInit ""
+  logGitBackupInit "============================================================"
+  logGitBackupInit "WAITING FOR DEPLOY KEY TO BE ADDED"
+  logGitBackupInit "============================================================"
+  logGitBackupInit ""
+  logGitBackupInit "The SSH key needs to be added to your Git repository as a"
+  logGitBackupInit "deploy key before we can continue."
+  logGitBackupInit ""
+  logGitBackupInit "Please add this public key to your repository NOW:"
+  logGitBackupInit ""
+  if [[ -f "${GIT_BACKUP_SSH_KEY_PATH}/id_ed25519.pub" ]]; then
+    cat "${GIT_BACKUP_SSH_KEY_PATH}/id_ed25519.pub" | while IFS= read -r line; do
+      logGitBackupInit "  ${line}"
+    done
+  fi
+  logGitBackupInit ""
+  logGitBackupInit "For GitHub: Repository -> Settings -> Deploy keys -> Add deploy key"
+  logGitBackupInit "            (Enable 'Allow write access' for push support)"
+  logGitBackupInit ""
+  logGitBackupInit "For GitLab: Repository -> Settings -> Repository -> Deploy keys"
+  logGitBackupInit "            (Enable write access)"
+  logGitBackupInit ""
+  logGitBackupInit "Waiting up to ${max_wait_time} seconds for deploy key..."
+  logGitBackupInit "(Set GIT_BACKUP_SSH_WAIT_TIMEOUT=0 to skip waiting)"
+  logGitBackupInit "============================================================"
+  logGitBackupInit ""
+
+  while [[ $waited_time -lt $max_wait_time ]]; do
+    sleep "${retry_interval}"
+    waited_time=$((waited_time + retry_interval))
+    fetch_attempts=$((fetch_attempts + 1))
+
+    logGitBackupInit "Retry attempt ${fetch_attempts} (waited ${waited_time}s of ${max_wait_time}s)..."
+    fetch_output=$(git fetch "${GIT_BACKUP_REMOTE_NAME}" 2>&1)
+    fetch_exit_code=$?
+
+    if [[ $fetch_exit_code -eq 0 ]]; then
+      logGitBackupInit ""
+      logGitBackupInit "============================================================"
+      logGitBackupInit "Deploy key accepted! SSH access verified."
+      logGitBackupInit "============================================================"
+      return 0
+    fi
+
+    # Check if it's now a different error
+    if [[ "$fetch_output" != *"Permission denied"* ]] && [[ "$fetch_output" != *"publickey"* ]]; then
+      logGitBackupInit "Remote responded (may not have content yet): ${fetch_output}"
+      return 0
+    fi
+  done
+
+  # Timeout reached
+  logGitBackupInit ""
+  logGitBackupInit "============================================================"
+  logGitBackupInit "TIMEOUT: Deploy key not accepted within ${max_wait_time} seconds"
+  logGitBackupInit "============================================================"
+  logGitBackupInit ""
+  logGitBackupInit "The server will continue starting, but Git push will fail until"
+  logGitBackupInit "you add the deploy key shown above to your repository."
+  logGitBackupInit ""
+  logGitBackupInit "TIP: Add the deploy key and the next backup trigger will retry."
+  logGitBackupInit "     Or restart the container after adding the key."
+  logGitBackupInit ""
+  return 1
+}
+
+# Setup remote for init mode and wait for deploy key if needed
+setup_remote_for_init() {
+  if ! isTrue "${GIT_BACKUP_PUSH_ENABLED}"; then
+    return 0
+  fi
+
+  if [[ -z "${GIT_BACKUP_REMOTE}" ]]; then
+    logGitBackupInit "Push enabled but no remote configured, skipping remote setup"
+    return 0
+  fi
+
+  logGitBackupInit "Setting up Git remote for init mode..."
+
+  cd "${GIT_BACKUP_PATH}" || {
+    logGitBackupInit "ERROR: Failed to change to ${GIT_BACKUP_PATH}"
+    return 1
+  }
+
+  # Add or update remote
+  local existing_remote
+  existing_remote=$(git remote get-url "${GIT_BACKUP_REMOTE_NAME}" 2>/dev/null)
+
+  if [[ -z "${existing_remote}" ]]; then
+    logGitBackupInit "Adding remote '${GIT_BACKUP_REMOTE_NAME}': ${GIT_BACKUP_REMOTE}"
+    if ! git remote add "${GIT_BACKUP_REMOTE_NAME}" "${GIT_BACKUP_REMOTE}" 2>&1; then
+      logGitBackupInit "ERROR: Failed to add remote"
+      return 1
+    fi
+  elif [[ "${existing_remote}" != "${GIT_BACKUP_REMOTE}" ]]; then
+    logGitBackupInit "Updating remote '${GIT_BACKUP_REMOTE_NAME}' URL"
+    git remote set-url "${GIT_BACKUP_REMOTE_NAME}" "${GIT_BACKUP_REMOTE}"
+  else
+    logGitBackupInit "Remote '${GIT_BACKUP_REMOTE_NAME}' already configured correctly"
+  fi
+
+  # If using SSH, wait for deploy key to be accepted
+  if is_ssh_remote "${GIT_BACKUP_REMOTE}"; then
+    wait_for_deploy_key
+    # Don't fail on timeout - let the daemon handle retries
+  fi
+
+  logGitBackupInit "Remote setup complete"
+  return 0
+}
+
 # Restore to a specific commit target
 restore_to_target() {
   local target="${GIT_BACKUP_RESTORE_TARGET}"
@@ -480,6 +624,10 @@ case "${GIT_BACKUP_INIT_MODE,,}" in
         logGitBackupInit "ERROR: Repository initialization failed"
         exit 1
       fi
+    fi
+    # For init mode with push enabled, setup remote and wait for deploy key
+    if isTrue "${GIT_BACKUP_PUSH_ENABLED}" && is_ssh_remote "${GIT_BACKUP_REMOTE}"; then
+      setup_remote_for_init
     fi
     ;;
   "")
