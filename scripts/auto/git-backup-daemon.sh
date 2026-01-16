@@ -632,6 +632,108 @@ setup_git_remote() {
   return 0
 }
 
+# Sync local branch with remote (fetch and merge)
+sync_with_remote() {
+  if ! isTrue "${GIT_BACKUP_PUSH_ENABLED}"; then
+    return 0
+  fi
+
+  cd "${GIT_BACKUP_PATH}" || return 1
+
+  local current_branch
+  if [[ -n "${GIT_BACKUP_BRANCH}" ]]; then
+    current_branch="${GIT_BACKUP_BRANCH}"
+  else
+    current_branch=$(git branch --show-current 2>/dev/null)
+  fi
+
+  if [[ -z "${current_branch}" ]]; then
+    logGitBackup "No current branch, skipping remote sync"
+    return 0
+  fi
+
+  logGitBackupAction "Fetching from remote '${GIT_BACKUP_REMOTE_NAME}'..."
+  local fetch_output
+  fetch_output=$(git fetch "${GIT_BACKUP_REMOTE_NAME}" 2>&1)
+  local fetch_exit_code=$?
+
+  if [[ $fetch_exit_code -ne 0 ]]; then
+    logGitBackup "Fetch failed (exit code: ${fetch_exit_code})"
+    if [[ -n "$fetch_output" ]]; then
+      logGitBackup "  Details: ${fetch_output}"
+    fi
+    logGitBackup "Continuing without sync (remote may not exist yet)"
+    return 0
+  fi
+
+  # Check if remote branch exists
+  if ! git rev-parse --verify "${GIT_BACKUP_REMOTE_NAME}/${current_branch}" &>/dev/null; then
+    logGitBackup "Remote branch '${current_branch}' doesn't exist yet, will be created on first push"
+    return 0
+  fi
+
+  # Check if we have any local commits
+  local local_commits
+  local_commits=$(git rev-list HEAD 2>/dev/null | wc -l)
+
+  if [[ "$local_commits" -eq 0 ]]; then
+    # No local commits, just reset to remote
+    logGitBackup "No local commits, resetting to remote branch..."
+    if git reset --hard "${GIT_BACKUP_REMOTE_NAME}/${current_branch}" 2>&1; then
+      logGitBackupAction "Reset to remote branch successful"
+    else
+      logGitBackup "WARNING: Failed to reset to remote branch"
+    fi
+    return 0
+  fi
+
+  # Check if local branch is behind remote
+  local behind_count
+  behind_count=$(git rev-list --count "HEAD..${GIT_BACKUP_REMOTE_NAME}/${current_branch}" 2>/dev/null || echo "0")
+
+  if [[ "$behind_count" -gt 0 ]]; then
+    logGitBackup "Local branch is ${behind_count} commit(s) behind remote, merging..."
+    
+    # Configure merge settings
+    git config user.name "${GIT_BACKUP_AUTHOR_NAME}" 2>/dev/null
+    git config user.email "${GIT_BACKUP_AUTHOR_EMAIL}" 2>/dev/null
+
+    # Try to merge remote changes (allow unrelated histories for fresh repos)
+    local merge_output
+    merge_output=$(git merge "${GIT_BACKUP_REMOTE_NAME}/${current_branch}" --allow-unrelated-histories -m "Merge remote changes" 2>&1)
+    local merge_exit_code=$?
+
+    if [[ $merge_exit_code -eq 0 ]]; then
+      logGitBackupAction "Merged remote changes successfully"
+    else
+      logGitBackup "Merge failed, trying rebase..."
+      # Abort failed merge
+      git merge --abort 2>/dev/null || true
+      
+      # Try rebase instead
+      local rebase_output
+      rebase_output=$(git rebase "${GIT_BACKUP_REMOTE_NAME}/${current_branch}" 2>&1)
+      local rebase_exit_code=$?
+
+      if [[ $rebase_exit_code -eq 0 ]]; then
+        logGitBackupAction "Rebased on remote changes successfully"
+      else
+        logGitBackup "WARNING: Could not sync with remote, will force push if needed"
+        git rebase --abort 2>/dev/null || true
+        # Set flag to force push later if needed
+        export GIT_BACKUP_FORCE_PUSH="true"
+      fi
+    fi
+  else
+    logGitBackup "Local branch is up to date with remote"
+  fi
+
+  # Set up tracking
+  git branch --set-upstream-to="${GIT_BACKUP_REMOTE_NAME}/${current_branch}" "${current_branch}" 2>/dev/null || true
+
+  return 0
+}
+
 run_git_push() {
   if ! isTrue "${GIT_BACKUP_PUSH_ENABLED}"; then
     return 0
@@ -653,9 +755,10 @@ run_git_push() {
     return 1
   fi
 
+  # Use -u to set upstream tracking on first push
   local push_output
   local push_exit_code
-  push_output=$(git push "${GIT_BACKUP_REMOTE_NAME}" "${branch_to_push}" 2>&1)
+  push_output=$(git push -u "${GIT_BACKUP_REMOTE_NAME}" "${branch_to_push}" 2>&1)
   push_exit_code=$?
 
   if [[ $push_exit_code -eq 0 ]]; then
@@ -663,14 +766,55 @@ run_git_push() {
     if [[ -n "$push_output" ]] && [[ "$push_output" != "Everything up-to-date" ]]; then
       logGitBackup "  Push output: ${push_output}"
     fi
+    # Clear force push flag on success
+    unset GIT_BACKUP_FORCE_PUSH
     return 0
-  else
-    logGitBackupAction "Push to '${GIT_BACKUP_REMOTE_NAME}/${branch_to_push}' FAILED (exit code: ${push_exit_code})"
-    if [[ -n "$push_output" ]]; then
-      logGitBackup "  Error details: ${push_output}"
-    fi
-    return 1
   fi
+
+  # Check if push was rejected due to non-fast-forward (remote has changes we don't have)
+  if [[ "$push_output" == *"fetch first"* ]] || [[ "$push_output" == *"non-fast-forward"* ]]; then
+    logGitBackup "Push rejected: remote has changes not present locally"
+    
+    # Try to pull and merge first
+    logGitBackup "Attempting to pull and merge remote changes..."
+    local pull_output
+    pull_output=$(git pull --rebase "${GIT_BACKUP_REMOTE_NAME}" "${branch_to_push}" 2>&1)
+    local pull_exit_code=$?
+
+    if [[ $pull_exit_code -eq 0 ]]; then
+      logGitBackup "Pull successful, retrying push..."
+      push_output=$(git push -u "${GIT_BACKUP_REMOTE_NAME}" "${branch_to_push}" 2>&1)
+      push_exit_code=$?
+
+      if [[ $push_exit_code -eq 0 ]]; then
+        logGitBackupAction "Push to '${GIT_BACKUP_REMOTE_NAME}/${branch_to_push}' succeeded after pull"
+        unset GIT_BACKUP_FORCE_PUSH
+        return 0
+      fi
+    else
+      logGitBackup "Pull failed: ${pull_output}"
+      git rebase --abort 2>/dev/null || true
+    fi
+
+    # If force push is allowed (sync failed earlier), use it as last resort
+    if isTrue "${GIT_BACKUP_FORCE_PUSH:-false}"; then
+      logGitBackup "WARNING: Using force push as fallback..."
+      push_output=$(git push --force-with-lease -u "${GIT_BACKUP_REMOTE_NAME}" "${branch_to_push}" 2>&1)
+      push_exit_code=$?
+
+      if [[ $push_exit_code -eq 0 ]]; then
+        logGitBackupAction "Force push to '${GIT_BACKUP_REMOTE_NAME}/${branch_to_push}' succeeded"
+        unset GIT_BACKUP_FORCE_PUSH
+        return 0
+      fi
+    fi
+  fi
+
+  logGitBackupAction "Push to '${GIT_BACKUP_REMOTE_NAME}/${branch_to_push}' FAILED (exit code: ${push_exit_code})"
+  if [[ -n "$push_output" ]]; then
+    logGitBackup "  Error details: ${push_output}"
+  fi
+  return 1
 }
 
 check_git_repo() {
@@ -831,6 +975,8 @@ if isTrue "${GIT_BACKUP_PUSH_ENABLED}"; then
     logGitBackup "ERROR: Failed to setup Git remote"
     exit 1
   fi
+  # Sync with remote to avoid push rejections
+  sync_with_remote
 fi
 
 # Setup .gitignore if enabled (will commit and push if patterns changed)
