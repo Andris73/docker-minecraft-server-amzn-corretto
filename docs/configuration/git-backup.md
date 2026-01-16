@@ -38,6 +38,8 @@ Set `GIT_BACKUP_ENABLED` to `true` to enable the git backup daemon:
 | `GIT_BACKUP_RESTORE_TARGET` | `` | Commit hash to restore to (empty = latest from remote) |
 | `GIT_BACKUP_GITIGNORE_ENABLED` | `true` | Auto-manage `.gitignore` based on patterns |
 | `GIT_BACKUP_GITIGNORE_PATTERNS` | `logs/,crash-reports/,cache/,bluemap/,libraries/,plugins/spark/` | Comma-separated patterns for auto-generated `.gitignore` |
+| `GIT_BACKUP_SSH_KEYGEN` | `true` | Auto-generate SSH key pair for SSH remotes (deploy key) |
+| `GIT_BACKUP_SSH_KEY_PATH` | `/data/.ssh` | Path to store generated SSH keys |
 
 ## Backup Triggers
 
@@ -187,7 +189,48 @@ Enable automatic pushing after each backup commit:
 
 For pushing to work, you'll need to configure authentication. There are several methods:
 
-**Option 1: HTTPS with Personal Access Token (recommended for GitHub/GitLab)**
+**Option 1: SSH with Auto-Generated Deploy Key (Recommended)**
+
+When using an SSH remote URL (`git@...` or `ssh://...`), the backup system automatically generates an SSH key pair on first startup. The public key is output to the logs for you to add as a deploy key.
+
+``` yaml
+    environment:
+      GIT_BACKUP_ENABLED: "true"
+      GIT_BACKUP_INIT_MODE: "clone"
+      GIT_BACKUP_REMOTE: "git@github.com:username/minecraft-backup.git"
+      GIT_BACKUP_PUSH_ENABLED: "true"
+```
+
+On first startup, you'll see output like:
+
+```
+[Git Backup] ============================================================
+[Git Backup] SSH PUBLIC KEY - Add this as a Deploy Key to your repository
+[Git Backup] ============================================================
+[Git Backup]
+[Git Backup]   ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... minecraft-server-backup
+[Git Backup]
+[Git Backup] ============================================================
+[Git Backup] NOTE: This is a NEW key. You must add it to your Git provider!
+[Git Backup]
+[Git Backup] For GitHub:
+[Git Backup]   1. Go to your repository -> Settings -> Deploy keys
+[Git Backup]   2. Click 'Add deploy key'
+[Git Backup]   3. Paste the public key above
+[Git Backup]   4. Check 'Allow write access' for push support
+[Git Backup]   5. Click 'Add key'
+```
+
+The key is stored in `/data/.ssh/` and persists with your data volume. You only need to add the deploy key once.
+
+To disable auto-generation (e.g., if mounting your own keys):
+
+``` yaml
+    environment:
+      GIT_BACKUP_SSH_KEYGEN: "false"
+```
+
+**Option 2: HTTPS with Personal Access Token**
 
 Include the token in the remote URL:
 
@@ -203,19 +246,20 @@ Or use environment-based credential helper:
       GIT_ASKPASS: "/path/to/credential-script.sh"
 ```
 
-**Option 2: SSH Key**
+**Option 3: Mount Your Own SSH Key**
 
-Mount your SSH key into the container and use an SSH URL:
+If you prefer to use an existing SSH key, disable auto-generation and mount your key:
 
 ``` yaml
     volumes:
-      - ~/.ssh/id_rsa:/root/.ssh/id_rsa:ro
-      - ~/.ssh/known_hosts:/root/.ssh/known_hosts:ro
+      - ~/.ssh/id_rsa:/data/.ssh/id_ed25519:ro
+      - ~/.ssh/known_hosts:/data/.ssh/known_hosts:ro
     environment:
       GIT_BACKUP_REMOTE: "git@github.com:username/minecraft-backup.git"
+      GIT_BACKUP_SSH_KEYGEN: "false"
 ```
 
-**Option 3: Git Credential Store**
+**Option 4: Git Credential Store**
 
 Mount a `.git-credentials` file:
 

@@ -23,6 +23,8 @@
 : "${GIT_BACKUP_RESTORE_TARGET:=}"
 : "${GIT_BACKUP_GITIGNORE_ENABLED:=true}"
 : "${GIT_BACKUP_GITIGNORE_PATTERNS:=logs/,crash-reports/,cache/,bluemap/,libraries/,plugins/spark/}"
+: "${GIT_BACKUP_SSH_KEYGEN:=true}"
+: "${GIT_BACKUP_SSH_KEY_PATH:=${GIT_BACKUP_PATH}/.ssh}"
 
 # shellcheck source=../auto/autopause-fcns.sh
 . /image/scripts/auto/autopause-fcns.sh
@@ -70,6 +72,144 @@ check_git_lfs_installed() {
     logGitBackup "ERROR: git-lfs is not installed but GIT_BACKUP_LFS_ENABLED is true"
     return 1
   fi
+  return 0
+}
+
+# Check if a remote URL uses SSH (git@ or ssh://)
+is_ssh_remote() {
+  local url="$1"
+  if [[ -z "$url" ]]; then
+    return 1
+  fi
+  if [[ "$url" =~ ^git@ ]] || [[ "$url" =~ ^ssh:// ]]; then
+    return 0
+  fi
+  return 1
+}
+
+# Extract hostname from SSH remote URL
+get_ssh_hostname() {
+  local url="$1"
+  local hostname=""
+  
+  if [[ "$url" =~ ^git@([^:]+): ]]; then
+    hostname="${BASH_REMATCH[1]}"
+  elif [[ "$url" =~ ^ssh://([^@]+@)?([^:/]+) ]]; then
+    hostname="${BASH_REMATCH[2]}"
+  fi
+  
+  echo "$hostname"
+}
+
+# Setup SSH keys for Git operations
+setup_ssh_keys() {
+  if ! isTrue "${GIT_BACKUP_SSH_KEYGEN}"; then
+    return 0
+  fi
+
+  if ! is_ssh_remote "${GIT_BACKUP_REMOTE}"; then
+    return 0
+  fi
+
+  logGitBackup "Setting up SSH keys for Git operations..."
+
+  local ssh_dir="${GIT_BACKUP_SSH_KEY_PATH}"
+  local key_file="${ssh_dir}/id_ed25519"
+  local pub_key_file="${key_file}.pub"
+  local ssh_config="${ssh_dir}/config"
+  local known_hosts="${ssh_dir}/known_hosts"
+  local key_generated=false
+
+  # Create SSH directory
+  if [[ ! -d "${ssh_dir}" ]]; then
+    logGitBackup "Creating SSH directory: ${ssh_dir}"
+    mkdir -p "${ssh_dir}"
+    chmod 700 "${ssh_dir}"
+  fi
+
+  # Generate SSH key if it doesn't exist
+  if [[ ! -f "${key_file}" ]]; then
+    logGitBackup "Generating new SSH key pair..."
+    if ! ssh-keygen -t ed25519 -f "${key_file}" -N "" -C "minecraft-server-backup" 2>&1; then
+      logGitBackup "ERROR: Failed to generate SSH key"
+      return 1
+    fi
+    chmod 600 "${key_file}"
+    chmod 644 "${pub_key_file}"
+    key_generated=true
+    logGitBackup "SSH key pair generated successfully"
+  else
+    logGitBackup "Using existing SSH key: ${key_file}"
+  fi
+
+  # Extract hostname from remote URL
+  local hostname
+  hostname=$(get_ssh_hostname "${GIT_BACKUP_REMOTE}")
+
+  # Create SSH config to use our key
+  logGitBackup "Configuring SSH for ${hostname:-git hosts}..."
+  cat > "${ssh_config}" << EOF
+# Auto-generated SSH config for Git Backup
+# Key path: ${key_file}
+
+Host *
+    IdentityFile ${key_file}
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    UserKnownHostsFile ${known_hosts}
+EOF
+  chmod 600 "${ssh_config}"
+
+  # Pre-populate known_hosts with common Git hosts
+  if [[ ! -f "${known_hosts}" ]] || [[ ! -s "${known_hosts}" ]]; then
+    logGitBackup "Fetching SSH host keys for known Git providers..."
+    {
+      ssh-keyscan -t ed25519,rsa github.com 2>/dev/null
+      ssh-keyscan -t ed25519,rsa gitlab.com 2>/dev/null
+      ssh-keyscan -t ed25519,rsa bitbucket.org 2>/dev/null
+    } > "${known_hosts}" 2>/dev/null
+    
+    if [[ -n "$hostname" ]] && [[ "$hostname" != "github.com" ]] && [[ "$hostname" != "gitlab.com" ]] && [[ "$hostname" != "bitbucket.org" ]]; then
+      logGitBackup "Fetching SSH host key for: ${hostname}"
+      ssh-keyscan -t ed25519,rsa "${hostname}" >> "${known_hosts}" 2>/dev/null || true
+    fi
+  fi
+
+  # Set GIT_SSH_COMMAND to use our config
+  export GIT_SSH_COMMAND="ssh -F ${ssh_config}"
+  logGitBackup "SSH configured with GIT_SSH_COMMAND"
+
+  # Output the public key for the user
+  logGitBackup "============================================================"
+  logGitBackup "SSH PUBLIC KEY - Add this as a Deploy Key to your repository"
+  logGitBackup "============================================================"
+  if [[ -f "${pub_key_file}" ]]; then
+    logGitBackup ""
+    cat "${pub_key_file}" | while IFS= read -r line; do
+      logGitBackup "  ${line}"
+    done
+    logGitBackup ""
+  fi
+  logGitBackup "============================================================"
+  
+  if [[ "$key_generated" == "true" ]]; then
+    logGitBackup "NOTE: This is a NEW key. You must add it to your Git provider!"
+    logGitBackup ""
+    logGitBackup "For GitHub:"
+    logGitBackup "  1. Go to your repository -> Settings -> Deploy keys"
+    logGitBackup "  2. Click 'Add deploy key'"
+    logGitBackup "  3. Paste the public key above"
+    logGitBackup "  4. Check 'Allow write access' for push support"
+    logGitBackup "  5. Click 'Add key'"
+    logGitBackup ""
+    logGitBackup "For GitLab:"
+    logGitBackup "  1. Go to your repository -> Settings -> Repository -> Deploy keys"
+    logGitBackup "  2. Add the key with write access enabled"
+    logGitBackup ""
+  fi
+  logGitBackup "Key location: ${pub_key_file}"
+  logGitBackup "============================================================"
+
   return 0
 }
 
@@ -633,6 +773,13 @@ if ! check_git_installed; then
   exit 1
 fi
 
+# Setup SSH keys before any git operations (if using SSH remote)
+if is_ssh_remote "${GIT_BACKUP_REMOTE}"; then
+  if ! setup_ssh_keys; then
+    logGitBackup "WARNING: SSH key setup failed, remote operations may fail"
+  fi
+fi
+
 configure_git_safe_directory
 
 if ! check_git_repo; then
@@ -673,6 +820,9 @@ logGitBackup "  Push enabled: ${GIT_BACKUP_PUSH_ENABLED}"
 if isTrue "${GIT_BACKUP_PUSH_ENABLED}"; then
   logGitBackup "  Remote name: ${GIT_BACKUP_REMOTE_NAME}"
   logGitBackup "  Remote URL: ${GIT_BACKUP_REMOTE}"
+  if is_ssh_remote "${GIT_BACKUP_REMOTE}"; then
+    logGitBackup "  SSH key path: ${GIT_BACKUP_SSH_KEY_PATH}"
+  fi
 fi
 
 # Setup remote first (so gitignore commits can be pushed)
